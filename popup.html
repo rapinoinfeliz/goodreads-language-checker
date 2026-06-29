@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>📚 Edições PT</h1>
+    <p class="subtitle">Goodreads Portuguese Edition Checker</p>
+  </header>
+
+  <main id="content">
+    <div id="loading" class="state">
+      <div class="spinner"></div>
+      <p>Buscando edições em português…</p>
+    </div>
+
+    <div id="error" class="state hidden">
+      <p class="error-icon">⚠️</p>
+      <p id="error-message"></p>
+    </div>
+
+    <div id="not-goodreads" class="state hidden">
+      <p class="error-icon">📖</p>
+      <p>Abra uma página de livro no Goodreads para usar esta extensão.</p>
+      <p class="hint">Ex: goodreads.com/book/show/…</p>
+    </div>
+
+    <div id="no-results" class="state hidden">
+      <p class="empty-icon">🇧🇷</p>
+      <p class="empty-text">Sem edição em português</p>
+      <p class="hint">Nenhuma edição em português foi encontrada para este livro.</p>
+    </div>
+
+    <div id="results" class="state hidden">
+      <p id="results-count" class="results-count"></p>
+      <ul id="editions-list" class="editions-list"></ul>
+    </div>
+  </main>
+
+  <footer>
+    <a id="editions-link" class="editions-link hidden" target="_blank" rel="noopener">
+      Ver todas as edições no Goodreads ↗
+    </a>
+  </footer>
+
+  <script src="shared.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

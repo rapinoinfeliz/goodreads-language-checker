@@ -1,0 +1,371 @@
+/* ── Goodreads PT Edition Checker — Content Script Styles ─── */
+
+/* Base badge container */
+.grpt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.3;
+  transition: all 0.2s ease;
+  max-width: 320px;
+  box-sizing: border-box;
+}
+
+/* ── Loading state ──────────────────────────────────────── */
+.grpt-loading {
+  background: #f0ebe5;
+  border: 1.5px solid #d4c4b0;
+  color: #5c3d2e;
+}
+
+.grpt-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #d4c4b0;
+  border-top-color: #5c3d2e;
+  border-radius: 50%;
+  animation: grpt-spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes grpt-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Not found state ────────────────────────────────────── */
+.grpt-not-found {
+  background: #f5f5f5;
+  border: 1.5px solid #ddd;
+  color: #888;
+}
+
+.grpt-not-found .grpt-icon {
+  font-size: 14px;
+  opacity: 0.6;
+}
+
+/* ── Error state ────────────────────────────────────────── */
+.grpt-error {
+  background: #fff8f0;
+  border: 1.5px solid #f0d0a0;
+  color: #a06020;
+}
+
+/* ── Found state (clicável) ─────────────────────────────── */
+.grpt-found {
+  background: linear-gradient(135deg, #e8f5e9, #f1f8e9);
+  border: 1.5px solid #81c784;
+  color: #2e7d32;
+  cursor: pointer;
+  user-select: none;
+}
+
+.grpt-found:hover {
+  background: linear-gradient(135deg, #c8e6c9, #dcedc8);
+  border-color: #66bb6a;
+  box-shadow: 0 2px 8px rgba(46, 125, 50, 0.15);
+  transform: translateY(-1px);
+}
+
+.grpt-found:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+/* ── Inner elements ─────────────────────────────────────── */
+.grpt-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.grpt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.grpt-label {
+  font-weight: 600;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.grpt-isbn {
+  font-size: 11px;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+
+.grpt-copy-hint {
+  font-size: 12px;
+  opacity: 0.5;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+.grpt-found:hover .grpt-copy-hint {
+  opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Painel flutuante (dropdown com edições, capas e ISBNs)
+   ═══════════════════════════════════════════════════════════ */
+
+/* Overlay escuro atrás do painel */
+.grpt-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  z-index: 99998;
+}
+
+/* Painel principal */
+.grpt-panel {
+  position: absolute;
+  z-index: 99999;
+  width: 360px;
+  max-height: 420px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  animation: grpt-panel-in 0.2s ease-out;
+}
+
+@keyframes grpt-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.grpt-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #2e7d32, #388e3c);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.grpt-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.grpt-panel-count {
+  background: rgba(255, 255, 255, 0.25);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.grpt-panel-close {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+  line-height: 1;
+}
+
+.grpt-panel-close:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* ── Lista de edições ───────────────────────────────────── */
+.grpt-panel-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+/* Scrollbar customizada */
+.grpt-panel-list::-webkit-scrollbar {
+  width: 5px;
+}
+.grpt-panel-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.grpt-panel-list::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 3px;
+}
+.grpt-panel-list::-webkit-scrollbar-thumb:hover {
+  background: #aaa;
+}
+
+/* ── Item de edição ─────────────────────────────────────── */
+.grpt-panel-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  transition: background 0.12s ease;
+}
+
+.grpt-panel-item:last-child {
+  border-bottom: none;
+}
+
+.grpt-panel-item:hover {
+  background: #f8f8f8;
+}
+
+/* ── Capa ───────────────────────────────────────────────── */
+.grpt-panel-cover {
+  flex-shrink: 0;
+  width: 50px;
+  height: 72px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f5f0eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e0d6cc;
+}
+
+.grpt-panel-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.grpt-panel-no-cover {
+  font-size: 24px;
+  opacity: 0.4;
+}
+
+/* ── Info ────────────────────────────────────────────────── */
+.grpt-panel-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.grpt-panel-item-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #1a1a2e;
+  line-height: 1.3;
+  margin: 0;
+  word-break: break-word;
+  /* Limitar a 2 linhas */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.grpt-panel-isbn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.grpt-panel-isbn {
+  font-size: 11px;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  color: #555;
+}
+
+.grpt-panel-no-isbn {
+  font-size: 11px;
+  color: #aaa;
+  font-style: italic;
+  margin: 0;
+}
+
+.grpt-panel-meta {
+  font-size: 10px;
+  color: #999;
+  margin: 0;
+  line-height: 1.3;
+  /* Limitar a 1 linha */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Botão copiar ───────────────────────────────────────── */
+.grpt-panel-copy {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #5c3d2e;
+  background: #f5f0eb;
+  border: 1px solid #d4c4b0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.grpt-panel-copy:hover {
+  background: #ebe0d4;
+  border-color: #5c3d2e;
+}
+
+.grpt-panel-copy:active {
+  transform: scale(0.96);
+}
+
+.grpt-panel-copy-done {
+  color: #2e7d32 !important;
+  background: #e8f5e9 !important;
+  border-color: #81c784 !important;
+}
+
+/* ── Footer ─────────────────────────────────────────────── */
+.grpt-panel-footer {
+  padding: 8px 16px;
+  border-top: 1px solid #eee;
+  text-align: center;
+  flex-shrink: 0;
+  background: #fafbfc;
+}
+
+.grpt-panel-link {
+  font-size: 11px;
+  color: #5c3d2e;
+  text-decoration: none;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.grpt-panel-link:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
