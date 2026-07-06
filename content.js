@@ -591,7 +591,8 @@
     const freeTextSpans = Array.from(document.querySelectorAll('span[id^="freeTextContainer"]'));
     
     for (const activeSpan of freeTextSpans) {
-      const container = activeSpan.closest('.prototip_StemWrapper, .tooltip, div[class*="tooltip" i], body');
+      // Remover "body" para não dar match na página inteira e injetar em lugares errados (como quotes)
+      const container = activeSpan.closest('.prototip_StemWrapper, .tooltip, div[class*="tooltip" i]');
       if (!container) continue;
 
       // Extrair o ID do livro a partir do link do título dentro do próprio tooltip
