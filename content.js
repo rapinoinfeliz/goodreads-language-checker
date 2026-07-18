@@ -71,33 +71,87 @@
 
       .modal-backdrop {
         position: fixed; inset: 0; pointer-events: auto; display: flex; align-items: center;
-        justify-content: center; padding: 20px; background: rgba(0,0,0,.35);
+        justify-content: center; padding: clamp(12px, 3vw, 28px); background: rgba(24, 20, 17, .46);
+        -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); animation: grpt-fade-in .16s ease-out;
       }
       .panel {
-        width: min(520px, 100%); max-height: min(620px, calc(100vh - 40px));
-        display: flex; flex-direction: column; overflow: hidden; color: #252525;
-        background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.3);
-        font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --grpt-panel-height: 520px; position: relative; width: min(640px, calc(100vw - 32px));
+        height: min(var(--grpt-panel-height), calc(100vh - 32px)); min-width: min(380px, calc(100vw - 32px));
+        min-height: min(280px, calc(100vh - 32px)); max-width: calc(100vw - 32px); max-height: calc(100vh - 32px);
+        display: flex; flex-direction: column; overflow: hidden; resize: both; color: #2f2925;
+        background: #fff; border: 1px solid rgba(70, 54, 44, .15); border-radius: 18px;
+        box-shadow: 0 26px 80px rgba(27, 21, 17, .3), 0 4px 16px rgba(27, 21, 17, .14);
+        font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        animation: grpt-panel-in .18s cubic-bezier(.2,.8,.2,1);
       }
-      .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px; color: #fff; background: #2e7d32; }
-      .panel-title { margin: 0; font-size: 15px; }
-      .panel-close { padding: 5px 9px; color: #fff; background: transparent; border: 0; border-radius: 5px; cursor: pointer; font-size: 17px; }
-      .panel-close:hover { background: rgba(255,255,255,.15); }
-      .panel-note { margin: 0; padding: 8px 16px; color: #755000; background: #fff7df; border-bottom: 1px solid #f1d58a; font-size: 11px; }
-      .edition-list { min-height: 0; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
-      .edition { display: grid; grid-template-columns: 50px minmax(0,1fr); gap: 11px; padding: 11px 16px; border-bottom: 1px solid #eee; }
-      .edition-cover { width: 50px; height: 72px; object-fit: cover; border-radius: 4px; background: #eee; }
+      .panel:focus { outline: none; }
+      .panel::after {
+        content: ""; position: absolute; right: 6px; bottom: 6px; width: 10px; height: 10px; pointer-events: none;
+        opacity: .42; background: repeating-linear-gradient(135deg, transparent 0 3px, #75695f 3px 4px);
+      }
+      .panel-header {
+        flex: 0 0 auto; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center;
+        gap: 12px; padding: 15px 16px 15px 18px; color: #fff;
+        background: linear-gradient(135deg, #1d5944 0%, #246b52 55%, #2e765d 100%);
+      }
+      .panel-header-icon {
+        width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+        background: rgba(255,255,255,.13); border: 1px solid rgba(255,255,255,.18); border-radius: 10px;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+      }
+      .panel-header-icon .brazil-flag { width: 24px; height: 17px; border-radius: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,.16); }
+      .panel-header-icon .language-flag { font-size: 22px; line-height: 1; }
+      .panel-heading { min-width: 0; }
+      .panel-title { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 720; letter-spacing: -.01em; }
+      .panel-summary { margin: 2px 0 0; color: rgba(255,255,255,.76); font-size: 11px; }
+      .panel-close {
+        width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+        color: #fff; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14);
+        border-radius: 50%; cursor: pointer; font-size: 20px; line-height: 1;
+      }
+      .panel-close:hover { background: rgba(255,255,255,.18); }
+      .panel-note {
+        flex: 0 0 auto; margin: 0; padding: 9px 18px; color: #71531f; background: #fff9e9;
+        border-bottom: 1px solid #eee2bf; font-size: 11px;
+      }
+      .edition-list {
+        flex: 1 1 auto; min-height: 0; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain;
+        scrollbar-color: #c7bdb4 transparent; scrollbar-width: thin; list-style: none; background: #fff;
+      }
+      .edition { display: grid; grid-template-columns: 56px minmax(0,1fr); gap: 13px; padding: 13px 18px; border-bottom: 1px solid #eeeae6; transition: background .12s ease; }
+      .edition:last-child { border-bottom: 0; }
+      .edition:hover { background: #faf8f5; }
+      .edition-cover { width: 56px; height: 82px; object-fit: cover; border-radius: 6px; background: #eeeae5; box-shadow: 0 2px 7px rgba(46, 37, 31, .16); }
       .edition-info { min-width: 0; }
-      .edition-title { margin: 0 0 4px; font-weight: 650; }
+      .edition-title { margin: 1px 0 6px; color: #302a26; font-size: 13px; font-weight: 680; line-height: 1.35; }
       .edition-title a { color: inherit; text-decoration: none; }
-      .edition-title a:hover { text-decoration: underline; }
-      .edition-meta, .edition-isbn { margin: 2px 0 0; color: #666; font-size: 11px; }
-      .panel-footer { padding: 9px 16px; text-align: center; border-top: 1px solid #eee; }
-      .panel-footer a { color: #5c3d2e; text-decoration: none; font-size: 11px; }
+      .edition-title a:hover { color: #1d5944; text-decoration: underline; text-underline-offset: 2px; }
+      .edition-meta, .edition-isbn { margin: 3px 0 0; color: #756c65; font-size: 11px; }
+      .edition-isbn { color: #92877e; font-variant-numeric: tabular-nums; }
+      .panel-footer { flex: 0 0 auto; padding: 11px 16px 13px; text-align: center; background: #faf8f5; border-top: 1px solid #e9e3de; }
+      .panel-footer a {
+        display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 7px 14px;
+        color: #315c4f; background: #fff; border: 1px solid #c9d8d2; border-radius: 999px;
+        text-decoration: none; font-size: 11px; font-weight: 650; box-shadow: 0 1px 2px rgba(31,74,59,.06);
+      }
+      .panel-footer a:hover { color: #fff; background: #246b52; border-color: #246b52; }
+
+      @keyframes grpt-fade-in { from { opacity: 0; } }
+      @keyframes grpt-panel-in { from { opacity: 0; transform: translateY(8px) scale(.985); } }
 
       @media (max-width: 600px) {
-        .edition { grid-template-columns: 42px minmax(0,1fr); }
-        .edition-cover { width: 42px; height: 62px; }
+        .modal-backdrop { align-items: flex-end; padding: 8px; }
+        .panel {
+          width: 100%; height: min(var(--grpt-panel-height), calc(100vh - 16px)); min-width: 0;
+          min-height: min(260px, calc(100vh - 16px)); max-width: 100%; max-height: calc(100vh - 16px);
+          resize: none; border-radius: 16px;
+        }
+        .panel::after { display: none; }
+        .panel-header { padding: 13px 12px 13px 14px; }
+        .panel-header-icon { width: 32px; height: 32px; border-radius: 9px; }
+        .edition { grid-template-columns: 46px minmax(0,1fr); gap: 11px; padding: 12px 14px; }
+        .edition-cover { width: 46px; height: 68px; }
+        .panel-note { padding: 8px 14px; }
       }
       @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
     `;
@@ -711,25 +765,44 @@
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');
     panel.setAttribute('aria-labelledby', 'grpt-panel-title');
+    panel.setAttribute('aria-describedby', 'grpt-panel-summary');
+    panel.tabIndex = -1;
+    const editionCount = state.editions.length;
+    const estimatedHeight = Math.min(680, Math.max(280,
+      132 + (state.partial ? 36 : 0) + Math.min(editionCount, 5) * 108));
+    panel.style.setProperty('--grpt-panel-height', `${estimatedHeight}px`);
 
     const header = document.createElement('header');
     header.className = 'panel-header';
+    const headerIcon = document.createElement('span');
+    headerIcon.className = 'panel-header-icon';
+    headerIcon.append(createLanguageIcon(language));
+    headerIcon.setAttribute('aria-hidden', 'true');
+    const heading = document.createElement('div');
+    heading.className = 'panel-heading';
     const title = document.createElement('h2');
     title.className = 'panel-title';
     title.id = 'grpt-panel-title';
-    title.textContent = `${language.flag} ${language.label} editions`;
+    title.textContent = `${language.label} editions`;
+    const summary = document.createElement('p');
+    summary.className = 'panel-summary';
+    summary.id = 'grpt-panel-summary';
+    summary.textContent = state.partial
+      ? `At least ${editionCount} ${editionCount === 1 ? 'edition' : 'editions'} found`
+      : `${editionCount} ${editionCount === 1 ? 'edition' : 'editions'} found`;
+    heading.append(title, summary);
     const close = document.createElement('button');
     close.className = 'panel-close';
     close.type = 'button';
     close.setAttribute('aria-label', 'Close');
     close.textContent = '×';
-    header.append(title, close);
+    header.append(headerIcon, heading, close);
     panel.appendChild(header);
 
     if (state.partial) {
       const note = document.createElement('p');
       note.className = 'panel-note';
-      note.textContent = 'For safety, only the first page of editions was checked.';
+      note.textContent = 'Showing the first Goodreads results page to keep requests limited.';
       panel.appendChild(note);
     }
 
@@ -762,9 +835,12 @@
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = panel.getRootNode().activeElement;
-      if (event.shiftKey && active === first) {
+      if (event.shiftKey && (active === first || active === panel)) {
         event.preventDefault();
         last.focus();
+      } else if (!event.shiftKey && active === panel) {
+        event.preventDefault();
+        first.focus();
       } else if (!event.shiftKey && active === last) {
         event.preventDefault();
         first.focus();
@@ -776,7 +852,7 @@
     });
     document.addEventListener('keydown', keyHandler);
     panelContext = { backdrop, keyHandler, opener: opener || mainContext?.button };
-    close.focus();
+    panel.focus();
   }
 
   function createEditionRow(edition) {

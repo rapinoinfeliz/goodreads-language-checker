@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [4.4.0] - 2026-07-17
+
+### Changed
+
+- Redesigned the matching-editions dialog with a more polished visual system.
+- The dialog now sizes itself to its contents and available viewport space.
+- Desktop users can resize the dialog manually; compact screens use a fitted
+  bottom-sheet layout.
+- Added a structured language header, result summary, refined edition cards,
+  clearer first-page notice, and a stronger Goodreads action button.
+- Improved responsive spacing, scrolling, focus styling, reduced-motion
+  behavior, and dialog accessibility metadata.
+
 ## [4.3.0] - 2026-07-17
 
 ### Added

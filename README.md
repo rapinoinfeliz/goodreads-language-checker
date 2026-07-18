@@ -22,8 +22,9 @@ currently exposed by the Goodreads editions filter.
 - **Book-page integration:** a dedicated pill appears below the purchase controls.
 - **At-a-glance cover status:** flag for a match, `×` for no match, and a small
   spinner while checking.
-- **Edition details:** click a positive marker or pill to view matching editions,
-  covers, metadata, ISBN-13 values, and Goodreads links.
+- **Edition details:** click a positive marker or pill to open a polished,
+  responsive, desktop-resizable panel with covers, metadata, ISBN-13 values,
+  and Goodreads links.
 - **Defensive request behavior:** one request at a time, a minimum delay between
   requests, a 30-second timeout, and first-page-only edition checks.
 - **Language-aware cache:** positive, negative, and partial results are cached

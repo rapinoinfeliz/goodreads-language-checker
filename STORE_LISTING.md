@@ -1,6 +1,6 @@
 # Chrome Web Store Listing and Submission Checklist
 
-This document contains release copy and dashboard answers for version 4.3.0.
+This document contains release copy and dashboard answers for version 4.4.0.
 Review the final Chrome Web Store dashboard wording before submission because
 Google may change its forms and policies.
 

@@ -53,7 +53,9 @@
       const mainShadow = mainHost?.shadowRoot;
       const badge = mainShadow?.querySelector('.grpt-badge');
       badge?.click();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const panel = globalShadow?.querySelector('.panel');
+      const panelRect = panel?.getBoundingClientRect();
       const ownColorBeforeNativeChange = getComputedStyle(badge).backgroundColor;
       document.getElementById('want-button').style.backgroundColor = '#8a4f7d';
       document.getElementById('want-button').style.borderColor = '#8a4f7d';
@@ -77,6 +79,16 @@
         doesNotRefetchBookPage: requestedUrls.every((url) => !url.includes('/book/show/')),
         firstPageOnly: requestedUrls[0]?.includes('/work/editions/999') === true,
         editionsPanelOpens: globalShadow?.querySelectorAll('.edition').length === 1,
+        panelAdaptsToContent: panelRect?.height >= 280 && panelRect?.height <= 380,
+        panelFitsViewport: panelRect?.width <= document.documentElement.clientWidth - (window.innerWidth <= 600 ? 16 : 32)
+          && panelRect?.height <= document.documentElement.clientHeight - (window.innerWidth <= 600 ? 16 : 32),
+        panelUsesResponsiveResize: Boolean(panel) && (window.innerWidth <= 600
+          ? getComputedStyle(panel).resize === 'none'
+          : getComputedStyle(panel).resize === 'both'),
+        panelReceivesInitialFocus: globalShadow?.activeElement === panel,
+        elegantPanelHeader: Boolean(panel?.querySelector('.panel-header-icon .brazil-flag'))
+          && panel?.querySelector('.panel-title')?.textContent === 'Portuguese editions'
+          && panel?.querySelector('.panel-summary')?.textContent === 'At least 1 edition found',
         goodreadsDomUntouched: !document.querySelector('.grpt-badge, .panel')
       };
       const passed = Object.values(checks).every(Boolean);
