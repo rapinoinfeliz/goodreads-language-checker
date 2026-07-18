@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install system tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep zip unzip
+      - name: Validate extension
+        run: bash scripts/validate.sh
+      - name: Upload Chrome Web Store package
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-web-store-package
+          path: dist/*.zip

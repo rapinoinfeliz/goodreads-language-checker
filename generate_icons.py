@@ -7,10 +7,12 @@ os.makedirs(ICON_DIR, exist_ok=True)
 
 BG_COLOR = '#5C3D2E'
 
-for size in [16, 48, 128]:
+for size in [16, 32, 48, 128]:
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    margin = max(1, size // 16)
+    # Chrome Web Store guidance recommends a 96x96 artwork area inside the
+    # required 128x128 icon, which corresponds to 1/8 transparent padding.
+    margin = max(2, size // 8)
 
     # Draw rounded rectangle background
     draw.rounded_rectangle(

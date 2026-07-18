@@ -1,223 +1,80 @@
-/* ── Base ─────────────────────────────────────────────── */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #302a26;
+  background: #f8f6f3;
 }
+
+* { box-sizing: border-box; }
 
 body {
-  width: 340px;
-  min-height: 180px;
-  max-height: 520px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 13px;
-  color: #1a1a2e;
-  background: #fafbfc;
-  overflow-y: auto;
-}
-
-/* ── Header ───────────────────────────────────────────── */
-header {
-  padding: 14px 16px 10px;
-  background: linear-gradient(135deg, #382110 0%, #5c3d2e 100%);
-  color: #fff;
-}
-
-header h1 {
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-}
-
-header .subtitle {
-  font-size: 10px;
-  opacity: 0.7;
-  margin-top: 2px;
-}
-
-/* ── States ───────────────────────────────────────────── */
-.state {
-  padding: 24px 16px;
-  text-align: center;
-}
-
-.hidden {
-  display: none !important;
-}
-
-/* Loading */
-.spinner {
-  width: 28px;
-  height: 28px;
-  margin: 0 auto 12px;
-  border: 3px solid #e0d6cc;
-  border-top-color: #5c3d2e;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-#loading p {
-  color: #666;
-  font-size: 12px;
-}
-
-/* Error / empty */
-.error-icon,
-.empty-icon {
-  font-size: 28px;
-  margin-bottom: 8px;
-}
-
-.empty-text {
-  font-size: 14px;
-  font-weight: 600;
-  color: #444;
-  margin-bottom: 4px;
-}
-
-.hint {
-  font-size: 11px;
-  color: #888;
-  margin-top: 4px;
-}
-
-/* ── Results ──────────────────────────────────────────── */
-.results-count {
-  padding: 10px 16px 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #2d6a4f;
-  text-align: left;
-  background: #e8f5e9;
-  border-bottom: 1px solid #c8e6c9;
-}
-
-.editions-list {
-  list-style: none;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.edition-item {
-  display: flex;
-  align-items: flex-start;
+  width: 280px;
+  margin: 0;
+  display: grid;
   gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid #eee;
-  transition: background 0.15s ease;
+  padding: 14px;
 }
 
-.edition-item:last-child {
-  border-bottom: none;
-}
+.language-control { position: relative; display: block; }
 
-.edition-item:hover {
-  background: #f5f0eb;
-}
-
-.edition-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.edition-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #1a1a2e;
-  line-height: 1.3;
-  word-break: break-word;
-}
-
-.edition-isbn {
-  font-size: 11px;
-  color: #666;
-  margin-top: 2px;
-  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
-}
-
-.edition-meta {
-  font-size: 10px;
-  color: #999;
-  margin-top: 2px;
-}
-
-/* ── Copy button ──────────────────────────────────────── */
-.copy-btn {
-  flex-shrink: 0;
-  align-self: center;
-  padding: 5px 10px;
-  font-size: 11px;
-  font-weight: 500;
-  color: #5c3d2e;
-  background: #f5f0eb;
-  border: 1px solid #d4c4b0;
-  border-radius: 4px;
+select {
+  width: 100%;
+  min-height: 42px;
+  appearance: none;
+  padding: 0 40px 0 12px;
+  color: #302a26;
+  background: #fff;
+  border: 1px solid #cfc6bd;
+  border-radius: 10px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  font: 600 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+select:hover { border-color: #8d7d71; }
+select:disabled { cursor: wait; opacity: .65; }
+
+.chevron {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-58%);
+  color: #65584f;
+  pointer-events: none;
+  font-size: 18px;
+}
+
+button {
+  min-height: 38px;
+  padding: 0 12px;
+  color: #fff;
+  background: #246b52;
+  border: 1px solid #246b52;
+  border-radius: 10px;
+  cursor: pointer;
+  font: 650 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button:hover { background: #1d5944; border-color: #1d5944; }
+button:disabled { cursor: wait; opacity: .72; }
+
+select:focus-visible,
+button:focus-visible {
+  outline: 3px solid rgba(36, 107, 82, .25);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
   white-space: nowrap;
+  border: 0;
 }
 
-.copy-btn:hover {
-  background: #ebe0d4;
-  border-color: #5c3d2e;
-}
-
-.copy-btn:active {
-  transform: scale(0.96);
-}
-
-.copy-btn.copied {
-  color: #2d6a4f;
-  background: #e8f5e9;
-  border-color: #81c784;
-}
-
-.no-isbn {
-  flex-shrink: 0;
-  align-self: center;
-  font-size: 10px;
-  color: #aaa;
-  font-style: italic;
-}
-
-/* ── Footer ───────────────────────────────────────────── */
-footer {
-  padding: 8px 16px 10px;
-  text-align: center;
-  border-top: 1px solid #eee;
-}
-
-.editions-link {
-  font-size: 11px;
-  color: #5c3d2e;
-  text-decoration: none;
-  opacity: 0.8;
-  transition: opacity 0.15s;
-}
-
-.editions-link:hover {
-  opacity: 1;
-  text-decoration: underline;
-}
-
-/* ── Scrollbar ────────────────────────────────────────── */
-.editions-list::-webkit-scrollbar {
-  width: 5px;
-}
-
-.editions-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.editions-list::-webkit-scrollbar-thumb {
-  background: #ccc;
-  border-radius: 3px;
-}
-
-.editions-list::-webkit-scrollbar-thumb:hover {
-  background: #aaa;
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
 }

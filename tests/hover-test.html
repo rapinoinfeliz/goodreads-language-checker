@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>GRPT hover test</title>
+  <style>
+    #cover-image,
+    #negative-cover-image { display: block; width: 80px; height: 120px; }
+    #avatar-image { display: block; width: 48px; height: 48px; }
+  </style>
+</head>
+<body>
+  <div class="tooltip-shell" role="tooltip">
+    <div id="tooltip">
+      <a id="book-link" href="https://www.goodreads.com/book/show/123-livro">Livro</a>
+      <span id="freeTextContainer123">Sinopse visível</span>
+    </div>
+  </div>
+  <div id="cover-card">
+    <a id="cover-host" href="https://www.goodreads.com/book/show/124-outro"><img id="cover-image" alt="Capa" width="80" height="120"></a>
+    <a id="cover-link" href="https://www.goodreads.com/book/show/124-outro">Outro livro</a>
+    <a href="https://www.goodreads.com/book/show/124-outro">Detalhes do mesmo livro</a>
+  </div>
+  <div id="negative-cover-card">
+    <div><img id="negative-cover-image" alt="Capa sem edição em português" width="80" height="120"></div>
+    <a href="https://www.goodreads.com/book/show/125-sem-portugues">Livro sem edição em português</a>
+  </div>
+  <div id="avatar-card">
+    <img id="avatar-image" alt="Author avatar" width="48" height="48">
+    <a href="https://www.goodreads.com/book/show/126-avatar-neighbor">Nearby book link</a>
+  </div>
+  <pre id="result">Executando…</pre>
+  <script>
+    (async () => {
+      const originalFetch = window.fetch.bind(window);
+      const editionHtml = await originalFetch('fixtures/portuguese-page-1.html').then((response) => response.text());
+      const noPortugueseHtml = await originalFetch('fixtures/no-portuguese.html').then((response) => response.text());
+      const storage = {};
+      window.chrome = {
+        runtime: { onMessage: { addListener() {} } },
+        storage: {
+          local: {
+            async get(key) { return { [key]: storage[key] }; },
+            async set(value) { Object.assign(storage, value); },
+            async remove(key) { delete storage[key]; }
+          }
+        }
+      };
+      let requests = 0;
+      const requestedUrls = [];
+      window.fetch = async (url) => {
+        requests += 1;
+        requestedUrls.push(String(url));
+        if (String(url).includes('/book/show/')) {
+          if (String(url).includes('/124.xml')) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+          const workId = String(url).includes('/125.xml') ? '1001'
+            : String(url).includes('/124.xml') ? '1000' : '999';
+          return { ok: true, status: 200, text: async () => `<a href="/work/quotes/${workId}">quotes</a>` };
+        }
+        const html = String(url).includes('/work/editions/1001') ? noPortugueseHtml : editionHtml;
+        return { ok: true, status: 200, text: async () => html };
+      };
+
+      const loadScript = (src) => new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+      await loadScript('../shared.js');
+      await loadScript('../content.js');
+
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const beforeHover = requests;
+      document.getElementById('book-link').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const shadow = document.getElementById('grpt-extension-root')?.shadowRoot;
+      const afterTooltip = requests;
+      const avatar = document.getElementById('avatar-image');
+      avatar.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const afterAvatarHover = requests;
+      const dimensionsBeforeCover = {
+        width: document.documentElement.scrollWidth,
+        height: document.documentElement.scrollHeight
+      };
+
+      const cover = document.getElementById('cover-image');
+      cover.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      cover.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      const afterShortHover = requests;
+
+      cover.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 780));
+      const loadingMarkerSeen = [...document.querySelectorAll('[data-grpt-cover-host]')]
+        .some((host) => host.shadowRoot?.querySelector('.cover-marker.loading .cover-spinner'));
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+
+      const negativeCover = document.getElementById('negative-cover-image');
+      negativeCover.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 2200));
+      const coverMarkers = [...document.querySelectorAll('[data-grpt-cover-host]')]
+        .map((host) => host.shadowRoot?.querySelector('.cover-marker'));
+      const foundCoverHost = [...document.querySelectorAll('[data-grpt-cover-host]')]
+        .find((host) => host.shadowRoot?.querySelector('.cover-marker.found'));
+      const foundCoverMarker = foundCoverHost?.shadowRoot?.querySelector('.cover-marker.found');
+      const dimensionsAfterCover = {
+        width: document.documentElement.scrollWidth,
+        height: document.documentElement.scrollHeight
+      };
+      const pathBeforeMarkerClick = location.pathname;
+      foundCoverMarker?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const editionsInPanel = shadow?.querySelectorAll('.edition').length;
+      const panelStayedOpen = Boolean(shadow?.querySelector('.panel'));
+      shadow?.querySelector('.panel-close')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const checks = {
+        noAutomaticRequest: beforeHover === 0,
+        tooltipDoesNotRequest: afterTooltip === 0,
+        squareImagesAreIgnored: afterAvatarHover === afterTooltip
+          && ![...document.querySelectorAll('[data-grpt-cover-host]')]
+            .some((host) => host.parentElement?.contains(avatar)),
+        tooltipInlineRemoved: !document.querySelector('[data-grpt-tooltip-host], .tooltip-status'),
+        usesWafSafeRoute: requestedUrls[0]?.endsWith('/book/show/124.xml') === true,
+        shortCoverHoverDoesNotRequest: afterShortHover === afterTooltip,
+        discreetLoaderShownWhileSearching: loadingMarkerSeen,
+        onlyRequiredCoverRequests: requests === 4,
+        coverFlagAdded: coverMarkers.some((marker) => marker?.classList.contains('found')
+          && marker.textContent.trim() === '' && marker.querySelector('.brazil-flag')),
+        coverXAdded: coverMarkers.some((marker) => marker?.classList.contains('not-found') && marker.textContent === '×'),
+        coverMarkerAnchoredLocally: foundCoverHost?.style.position === 'absolute'
+          && foundCoverHost.parentElement?.contains(cover) === true
+          && foundCoverHost.style.overflow === 'hidden'
+          && !shadow?.querySelector('.cover-marker'),
+        coverDoesNotResizePage: dimensionsAfterCover.width === dimensionsBeforeCover.width
+          && dimensionsAfterCover.height === dimensionsBeforeCover.height,
+        coverFlagIsClickable: foundCoverMarker?.getAttribute('role') === 'button'
+          && foundCoverMarker?.getAttribute('tabindex') === '0',
+        coverFlagOpensEditions: editionsInPanel === 1,
+        coverPanelStaysOpen: panelStayedOpen,
+        coverFocusIsRestored: foundCoverHost?.shadowRoot?.activeElement === foundCoverMarker,
+        coverFlagDoesNotNavigate: location.pathname === pathBeforeMarkerClick,
+        goodreadsDomUntouched: !document.querySelector('.cover-marker, .tooltip-status')
+      };
+      const passed = Object.values(checks).every(Boolean);
+      document.body.dataset.status = passed ? 'passed' : 'failed';
+      document.getElementById('result').textContent = JSON.stringify({ passed, requests, checks }, null, 2);
+    })().catch((error) => {
+      document.body.dataset.status = 'failed';
+      document.getElementById('result').textContent = error.stack || String(error);
+    });
+  </script>
+</body>
+</html>

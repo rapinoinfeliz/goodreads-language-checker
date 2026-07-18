@@ -1,726 +1,842 @@
 /**
- * Goodreads PT Edition Checker — content.js
+ * Goodreads Edition Language Checker — isolated content script.
  *
- * Content script que roda em páginas de livro do Goodreads.
- * Substitui o botão "Buy on Amazon" por um badge indicando
- * se existe edição em português. Ao clicar no badge, abre um
- * painel flutuante com todas as edições, capas e ISBNs.
- *
- * Fluxo:
- * 1. Encontra o botão "Buy on Amazon" na página
- * 2. Substitui por um badge de "carregando"
- * 3. Extrai o work_id do DOM da página
- * 4. Faz fetch da página de edições filtrada por português (same-origin)
- * 5. Parseia o HTML para extrair edições, ISBNs e URLs de capa
- * 6. Atualiza o badge com o resultado
- * 7. Ao clicar no badge, abre painel flutuante com detalhes
+ * The panel lives in a Shadow DOM portal. The book-page pill and every cover
+ * marker use local Shadow DOM hosts without leaking styles into Goodreads.
  */
-
-(async function () {
+(function () {
   'use strict';
 
-  // ── Variáveis de estado global ────────────────────────────────
-  const STORAGE_KEY = 'grpt_found_books';
-  let foundEditions = [];
-  let editionsPageUrl = '';
-  let currentPathname = window.location.pathname;
-  let isChecking = false;
+  const COVER_HOVER_DELAY_MS = 700;
+  const MIN_REQUEST_INTERVAL_MS = 1500;
+  const REQUEST_TIMEOUT_MS = 30000;
+  const MAX_MEMORY_BOOK_STATES = 200;
 
-  // Cache para tooltips
-  let bookCache = new Map(); // bookId -> { status, editions, workId }
+  const bookStates = new Map();
+  const coverRecords = new Map();
+  const coverTimers = new WeakMap();
+  const activeCoverImages = new WeakSet();
+  const coverMountStates = new WeakMap();
 
-  // Fila de fetches para tooltips com controle de concorrência
-  const fetchQueue = {
-    MAX_CONCURRENT: 3,
-    active: 0,
-    pending: [],
-    queued: new Set(), // bookIds já na fila para evitar duplicatas
-    enqueue(bookId, container, activeSpan) {
-      if (this.queued.has(bookId)) return;
-      this.queued.add(bookId);
-      this.pending.push({ bookId, container, activeSpan });
-      this._drain();
-    },
-    async _drain() {
-      while (this.active < this.MAX_CONCURRENT && this.pending.length > 0) {
-        const job = this.pending.shift();
-        this.active++;
-        fetchEditionsForTooltip(job.bookId, job.container, job.activeSpan)
-          .finally(() => {
-            this.active--;
-            this.queued.delete(job.bookId);
-            this._drain();
-          });
+  let requestQueue = Promise.resolve();
+  let lastRequestStartedAt = 0;
+  let mainInitTimer = null;
+  let mainContext = null;
+  let observedPathname = window.location.pathname;
+  let panelContext = null;
+  let selectedLanguage = GRPT.Settings.normalizeLanguage(GRPT.Settings.DEFAULT_LANGUAGE_CODE);
+
+  const ui = createIsolatedUI();
+
+  function createIsolatedUI() {
+    const host = document.createElement('div');
+    host.id = 'grpt-extension-root';
+    host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483000;pointer-events:none;';
+    document.documentElement.appendChild(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
+    style.textContent = `
+      :host, * { box-sizing: border-box; }
+      button, a { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .layer { position: fixed; inset: 0; pointer-events: none; }
+
+      .grpt-badge {
+        position: relative; width: 100%; pointer-events: auto; display: inline-flex; align-items: center; justify-content: center;
+        gap: 10px; max-width: 360px; min-height: 40px; padding: 8px 15px; color: #315c4f;
+        background: #f3f7f5; border: 2px solid #b9d2c8; border-radius: 9999px !important;
+        overflow: hidden; clip-path: inset(0 round 9999px); -webkit-clip-path: inset(0 round 9999px); isolation: isolate;
+        box-shadow: 0 1px 2px rgba(31, 74, 59, .08); font: 500 15px/1.2 Lato, "Helvetica Neue", Arial, sans-serif;
+        cursor: default; white-space: nowrap;
       }
-    }
-  };
-
-  function loadPersistedBooks() {
-    try {
-      const data = localStorage.getItem(STORAGE_KEY);
-      if (data) {
-        const parsed = JSON.parse(data);
-        const now = Date.now();
-        for (const [key, val] of Object.entries(parsed)) {
-          if (val.status === 'not-found') {
-            // TTL de 7 dias (7 * 24 * 60 * 60 * 1000)
-            if (!val.timestamp || now - val.timestamp > 604800000) {
-              continue; // Expirou
-            }
-          }
-          bookCache.set(key, val);
-        }
+      .grpt-badge:disabled { opacity: 1; }
+      .grpt-badge.grpt-found, .grpt-badge.grpt-error { cursor: pointer; }
+      .grpt-badge.grpt-found { color: #fff; background: #246b52; border-color: #246b52; box-shadow: 0 2px 5px rgba(36, 107, 82, .2); }
+      .grpt-badge.grpt-found:hover { background: #1d5944; border-color: #1d5944; }
+      .grpt-badge.grpt-not-found { color: #746c65; background: #f5f3f0; border-color: #d5cec7; box-shadow: none; }
+      .grpt-badge.grpt-error { color: #814b12; background: #fff5e8; border-color: #e4bd8c; box-shadow: none; }
+      .grpt-badge.grpt-error:hover { background: #fcebd5; }
+      .grpt-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; color: currentColor; font-size: 20px; font-weight: 300; line-height: 1; }
+      .grpt-badge .brazil-flag { width: 22px; height: 15px; border-radius: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,.12); }
+      .grpt-badge .language-flag { font-size: 20px; line-height: 1; }
+      .grpt-count { min-width: 22px; padding: 2px 6px; color: currentColor; background: rgba(0,0,0,.13); border-radius: 11px; text-align: center; font-size: 10px; font-weight: 700; }
+      .grpt-chevron { color: currentColor; opacity: .72; font-size: 18px; line-height: 1; }
+      .main-spinner { width: 12px; height: 12px; border: 2px solid #c8c0b5; border-top-color: #6d6256; border-radius: 50%; animation: grpt-spin .8s linear infinite; }
+      @keyframes grpt-spin { to { transform: rotate(360deg); } }
+      .grpt-badge:focus-visible, .panel button:focus-visible, .panel a:focus-visible {
+        outline: 3px solid #1f6feb; outline-offset: 2px;
       }
-    } catch (e) {
-      console.error('[Goodreads PT] Erro ao carregar cache persistente:', e);
-    }
-  }
 
-  function persistBookIfFound(bookId, cacheData) {
-    if (cacheData.status === 'found' || cacheData.status === 'not-found') {
-      try {
-        const data = localStorage.getItem(STORAGE_KEY);
-        const parsed = data ? JSON.parse(data) : {};
-        cacheData.timestamp = Date.now();
-        parsed[bookId] = cacheData;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-      } catch (e) {
-        console.error('[Goodreads PT] Erro ao salvar cache persistente:', e);
+      .modal-backdrop {
+        position: fixed; inset: 0; pointer-events: auto; display: flex; align-items: center;
+        justify-content: center; padding: 20px; background: rgba(0,0,0,.35);
       }
-    }
-  }
-
-  // Carrega os livros já encontrados do localStorage ao iniciar
-  loadPersistedBooks();
-
-  // ── 1. Encontrar o botão "Buy on Amazon" ─────────────────────
-
-  function findAmazonButton() {
-    // Procurar por botão ou link que tenha "Amazon" no aria-label ou no texto
-    const candidates = document.querySelectorAll('button, a');
-    for (const el of candidates) {
-      const text = el.textContent.trim().toLowerCase();
-      const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
-      
-      if (text.includes('amazon') || ariaLabel.includes('amazon')) {
-        const group = el.closest('[class*="ButtonGroup"], [class*="buyButton"], [class*="BookActions__button"]');
-        return group || el.parentElement;
+      .panel {
+        width: min(520px, 100%); max-height: min(620px, calc(100vh - 40px));
+        display: flex; flex-direction: column; overflow: hidden; color: #252525;
+        background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.3);
+        font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
-    }
+      .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px; color: #fff; background: #2e7d32; }
+      .panel-title { margin: 0; font-size: 15px; }
+      .panel-close { padding: 5px 9px; color: #fff; background: transparent; border: 0; border-radius: 5px; cursor: pointer; font-size: 17px; }
+      .panel-close:hover { background: rgba(255,255,255,.15); }
+      .panel-note { margin: 0; padding: 8px 16px; color: #755000; background: #fff7df; border-bottom: 1px solid #f1d58a; font-size: 11px; }
+      .edition-list { min-height: 0; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+      .edition { display: grid; grid-template-columns: 50px minmax(0,1fr); gap: 11px; padding: 11px 16px; border-bottom: 1px solid #eee; }
+      .edition-cover { width: 50px; height: 72px; object-fit: cover; border-radius: 4px; background: #eee; }
+      .edition-info { min-width: 0; }
+      .edition-title { margin: 0 0 4px; font-weight: 650; }
+      .edition-title a { color: inherit; text-decoration: none; }
+      .edition-title a:hover { text-decoration: underline; }
+      .edition-meta, .edition-isbn { margin: 2px 0 0; color: #666; font-size: 11px; }
+      .panel-footer { padding: 9px 16px; text-align: center; border-top: 1px solid #eee; }
+      .panel-footer a { color: #5c3d2e; text-decoration: none; font-size: 11px; }
 
-    // Fallback: TreeWalker para texto puro "Amazon"
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      { acceptNode: (node) =>
-        node.textContent.toLowerCase().includes('amazon') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      @media (max-width: 600px) {
+        .edition { grid-template-columns: 42px minmax(0,1fr); }
+        .edition-cover { width: 42px; height: 62px; }
       }
-    );
-    const textNode = walker.nextNode();
-    if (textNode) {
-      const el = textNode.parentElement;
-      const group = el.closest('[class*="ButtonGroup"], [class*="buyButton"], [class*="BookActions__button"]');
-      return group || el.parentElement;
-    }
-
-    return null;
-  }
-
-  // ── 2. Extração do work_id ────────────────────────────────────
-
-  function extractWorkId(doc = document, bodyHtml = document.body.innerHTML) {
-    const editionsLinks = doc.querySelectorAll('a[href*="/work/editions/"]');
-    for (const link of editionsLinks) {
-      const match = link.href.match(/\/work\/editions\/(\d+)/);
-      if (match) return match[1];
-    }
-
-    const workLinks = doc.querySelectorAll('a[href*="/work/"]');
-    for (const link of workLinks) {
-      const match = link.href.match(/\/work\/(\d+)/);
-      if (match) return match[1];
-    }
-
-    const regexMatch = bodyHtml.match(/\/work\/editions\/(\d+)/);
-    if (regexMatch) return regexMatch[1];
-
-    const workRegex = bodyHtml.match(/work[_\-]?id["\s:=]+(\d+)/i);
-    if (workRegex) return workRegex[1];
-
-    return null;
-  }
-
-  // ── 3. Parsing da página de edições ───────────────────────────
-
-
-  // ── 4. Badge ──────────────────────────────────────────────────
-
-  function createBadge(state, editions) {
-    const badge = document.createElement('div');
-    badge.className = 'grpt-badge';
-
-    if (state === 'loading') {
-      badge.classList.add('grpt-loading');
-      badge.innerHTML = `
-        <span class="grpt-spinner"></span>
-        <span class="grpt-text">Buscando edição PT…</span>
-      `;
-      return badge;
-    }
-
-    if (state === 'error') {
-      badge.classList.add('grpt-error');
-      badge.innerHTML = `
-        <span class="grpt-icon">⚠️</span>
-        <span class="grpt-text">Erro ao buscar edição PT</span>
-      `;
-      return badge;
-    }
-
-    if (state === 'not-found') {
-      badge.classList.add('grpt-not-found');
-      badge.innerHTML = `
-        <span class="grpt-icon">✗</span>
-        <span class="grpt-text">Sem edição em português</span>
-      `;
-      return badge;
-    }
-
-    // state === 'found'
-    const count = editions.length;
-    badge.classList.add('grpt-found');
-    badge.setAttribute('role', 'button');
-    badge.setAttribute('tabindex', '0');
-    badge.setAttribute('title', 'Clique para ver edições em português');
-
-    badge.innerHTML = `
-      <span class="grpt-icon">🇧🇷</span>
-      <span class="grpt-text">
-        <span class="grpt-label">Edição PT disponível</span>
-        <span class="grpt-isbn">${count} ${count !== 1 ? 'edições encontradas' : 'edição encontrada'}</span>
-      </span>
-      <span class="grpt-copy-hint">▾</span>
+      @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
     `;
+    shadow.appendChild(style);
 
-    // Click → abrir painel flutuante com as edições
-    badge.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      togglePanel(badge);
-    });
-
-    badge.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        togglePanel(badge);
-      }
-    });
-
-    return badge;
+    const modalLayer = makeLayer(shadow, 'modal-layer');
+    return { host, shadow, modalLayer };
   }
 
-  // ── 5. Painel flutuante ───────────────────────────────────────
+  function makeLayer(shadow, className) {
+    const layer = document.createElement('div');
+    layer.className = `layer ${className}`;
+    shadow.appendChild(layer);
+    return layer;
+  }
 
-  function togglePanel(badge) {
-    const existing = document.querySelector('.grpt-panel');
-    if (existing) {
-      existing.remove();
-      document.querySelector('.grpt-overlay')?.remove();
+  function createBrazilFlag() {
+    const namespace = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(namespace, 'svg');
+    svg.classList.add('brazil-flag');
+    svg.setAttribute('viewBox', '0 0 28 20');
+    svg.setAttribute('aria-hidden', 'true');
+    const background = document.createElementNS(namespace, 'rect');
+    background.setAttribute('width', '28');
+    background.setAttribute('height', '20');
+    background.setAttribute('rx', '1');
+    background.setAttribute('fill', '#009b3a');
+    const diamond = document.createElementNS(namespace, 'path');
+    diamond.setAttribute('d', 'M14 2.4 25 10 14 17.6 3 10Z');
+    diamond.setAttribute('fill', '#ffdf00');
+    const globe = document.createElementNS(namespace, 'circle');
+    globe.setAttribute('cx', '14');
+    globe.setAttribute('cy', '10');
+    globe.setAttribute('r', '4.4');
+    globe.setAttribute('fill', '#002776');
+    svg.append(background, diamond, globe);
+    return svg;
+  }
+
+  function createLanguageIcon(language = selectedLanguage) {
+    if (language.code === 'por') return createBrazilFlag();
+    const icon = document.createElement('span');
+    icon.className = 'language-flag';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = language.flag;
+    return icon;
+  }
+
+  function appendTextElement(parent, className, text) {
+    const element = document.createElement('span');
+    if (className) element.className = className;
+    element.textContent = text;
+    parent.appendChild(element);
+    return element;
+  }
+
+  function delay(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+
+  function isVisible(element) {
+    return Boolean(element?.isConnected && element.getClientRects().length > 0);
+  }
+
+  function stateKey(bookId, languageCode = selectedLanguage.code) {
+    return `${languageCode}:${bookId}`;
+  }
+
+  function getBookState(bookId) {
+    return bookStates.get(stateKey(String(bookId))) || null;
+  }
+
+  function setBookState(bookId, state) {
+    const key = stateKey(String(bookId), state.language.code);
+    bookStates.delete(key);
+    bookStates.set(key, state);
+    if (bookStates.size > MAX_MEMORY_BOOK_STATES) {
+      for (const [candidateKey, candidate] of bookStates) {
+        if (bookStates.size <= MAX_MEMORY_BOOK_STATES) break;
+        if (['queued', 'loading'].includes(candidate.status)) continue;
+        if (mainContext && candidateKey === stateKey(mainContext.bookId)) continue;
+        bookStates.delete(candidateKey);
+      }
+    }
+    if (state.language.code === selectedLanguage.code) refreshBookUI(String(bookId));
+  }
+
+  function refreshBookUI(bookId) {
+    for (const record of coverRecords.values()) {
+      if (record.bookId === bookId) renderCoverRecord(record);
+    }
+    if (mainContext?.bookId === bookId) renderMainButton();
+  }
+
+  function lookupBook(bookId, knownWorkId = null) {
+    const key = String(bookId);
+    const language = selectedLanguage;
+    const existing = getBookState(key);
+    if (existing?.status) return existing.promise || Promise.resolve(existing);
+
+    const state = { status: 'queued', editions: [], workId: knownWorkId, partial: false, promise: null, language };
+    setBookState(key, state);
+    const promise = requestQueue
+      .catch(() => {})
+      .then(async () => {
+        const wait = Math.max(0, MIN_REQUEST_INTERVAL_MS - (Date.now() - lastRequestStartedAt));
+        if (wait) await delay(wait);
+        lastRequestStartedAt = Date.now();
+        state.status = 'loading';
+        setBookState(key, state);
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        try {
+          let workId = knownWorkId || await GRPT.Cache.getWorkIdForBook(key);
+          if (!workId) {
+            const response = await fetch(`/book/show/${key}.xml`, {
+              credentials: 'include',
+              signal: controller.signal
+            });
+            if (!response.ok || response.status === 202) throw new Error(`HTTP ${response.status}`);
+            const html = await response.text();
+            if (html.includes('awsWafCookieDomainList')) throw new Error('AWS WAF');
+            workId = GRPT.extractWorkId(null, html);
+            if (!workId) throw new Error('work_id not found');
+          }
+          state.workId = String(workId);
+          await GRPT.Cache.setWorkIdForBook(key, state.workId);
+
+          let cached = await GRPT.Cache.getWork(state.workId, language.code);
+          if (!cached) {
+            const result = await GRPT.fetchAllEditions(state.workId, {
+              signal: controller.signal,
+              maxPages: 1,
+              languageCode: language.code
+            });
+            await GRPT.Cache.setWork(state.workId, result, language.code);
+            cached = {
+              status: result.editions.length ? 'found' : 'not-found',
+              editions: result.editions,
+              partial: result.partial
+            };
+          }
+
+          state.status = cached.status;
+          state.editions = cached.editions;
+          state.partial = Boolean(cached.partial);
+          setBookState(key, state);
+          return state;
+        } catch (error) {
+          console.error('[Goodreads Edition Checker] Failed to check book:', key, error);
+          state.status = 'error';
+          state.error = error;
+          setBookState(key, state);
+          return state;
+        } finally {
+          clearTimeout(timeout);
+        }
+      });
+    state.promise = promise;
+    requestQueue = promise;
+    return promise;
+  }
+
+  // ── Covers ───────────────────────────────────────────────────
+
+  function findBookLinkNearImage(image) {
+    const direct = image.closest('a[href*="/book/show/"]');
+    if (direct) return direct;
+    let current = image.parentElement;
+    for (let depth = 0; current && current !== document.body && depth < 8; depth += 1) {
+      const links = [...current.querySelectorAll('a[href*="/book/show/"]')];
+      if (links.length) {
+        const ids = new Set(links.map((link) => GRPT.extractBookId(link.href)).filter(Boolean));
+        if (ids.size === 1) return links[0];
+        if (ids.size > 1) return null;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function isLikelyBookCover(image) {
+    const rect = image.getBoundingClientRect();
+    if (rect.width < 24 || rect.height < 36) return false;
+    const aspectRatio = rect.width / rect.height;
+    return aspectRatio >= 0.45 && aspectRatio <= 0.9;
+  }
+
+  function findCoverMount(image) {
+    const imageRect = image.getBoundingClientRect();
+    let current = image.parentElement;
+    for (let depth = 0; current && current !== document.body && depth < 5; depth += 1) {
+      if (current.tagName !== 'PICTURE') {
+        const rect = current.getBoundingClientRect();
+        const containsImageCenter = rect.left <= imageRect.left + imageRect.width / 2
+          && rect.right >= imageRect.left + imageRect.width / 2
+          && rect.top <= imageRect.top + imageRect.height / 2
+          && rect.bottom >= imageRect.top + imageRect.height / 2;
+        if (containsImageCenter && rect.width > 0 && rect.height > 0) return current;
+      }
+      current = current.parentElement;
+    }
+    return image.parentElement;
+  }
+
+  function acquireCoverMount(mount) {
+    let state = coverMountStates.get(mount);
+    if (!state) {
+      const changedPosition = getComputedStyle(mount).position === 'static';
+      state = { count: 0, changedPosition, originalInlinePosition: mount.style.position };
+      if (changedPosition) mount.style.position = 'relative';
+      coverMountStates.set(mount, state);
+    }
+    state.count += 1;
+  }
+
+  function releaseCoverMount(mount) {
+    const state = coverMountStates.get(mount);
+    if (!state) return;
+    state.count -= 1;
+    if (state.count > 0) return;
+    if (state.changedPosition && mount.style.position === 'relative') {
+      mount.style.position = state.originalInlinePosition;
+    }
+    coverMountStates.delete(mount);
+  }
+
+  function createCoverRecord(image, bookId) {
+    const mount = findCoverMount(image);
+    if (!mount) return null;
+    acquireCoverMount(mount);
+
+    const host = document.createElement('span');
+    host.dataset.grptCoverHost = '';
+    host.style.cssText = 'all:initial;position:absolute;left:0;top:0;width:0;height:0;z-index:1;overflow:hidden;pointer-events:none;';
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = `
+      :host { all: initial; }
+      .cover-marker {
+        position: absolute; right: 0; top: 0; display: inline-flex; align-items: center; justify-content: center;
+        gap: 4px; height: 22px; padding: 3px 6px; border: 0; border-radius: 0 4px 0 7px;
+        box-sizing: border-box; box-shadow: -1px 1px 4px rgba(0,0,0,.28);
+        font: 800 9px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: .04em; pointer-events: none; overflow: hidden;
+      }
+      .cover-marker.found { width: 26px; padding: 3px 4px; color: #174d28; background: rgba(255,255,255,.96); border-left: 1px solid rgba(0,0,0,.12); border-bottom: 1px solid rgba(0,0,0,.12); pointer-events: auto; cursor: pointer; }
+      .cover-marker.found:hover { background: #fff; filter: brightness(.97); }
+      .cover-marker.found:focus-visible { outline: 2px solid #1f6feb; outline-offset: -2px; }
+      .cover-marker.found .brazil-flag { width: 18px; height: 12px; flex: 0 0 auto; border-radius: 1px; }
+      .cover-marker.found .language-flag { font-size: 16px; line-height: 1; }
+      .cover-marker.not-found { width: 19px; height: 19px; padding: 0; color: #fff; background: rgba(56,51,47,.88); font-size: 14px; font-weight: 700; }
+      .cover-marker.loading { width: 19px; height: 19px; padding: 0; background: rgba(255,255,255,.94); border-left: 1px solid rgba(0,0,0,.1); border-bottom: 1px solid rgba(0,0,0,.1); }
+      .cover-spinner { width: 10px; height: 10px; box-sizing: border-box; border: 1.5px solid #c9d6c8; border-top-color: #39763f; border-radius: 50%; animation: spin .7s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .cover-spinner { animation: none; border-top-color: #39763f; } }
+    `;
+    const marker = document.createElement('span');
+    marker.className = 'cover-marker';
+    marker.setAttribute('role', 'img');
+    marker.addEventListener('click', (event) => {
+      const state = getBookState(record.bookId);
+      if (state?.status !== 'found') return;
+      event.preventDefault();
+      event.stopPropagation();
+      openEditionsPanel(state, record.marker);
+    });
+    marker.addEventListener('keydown', (event) => {
+      if (!['Enter', ' '].includes(event.key)) return;
+      const state = getBookState(record.bookId);
+      if (state?.status !== 'found') return;
+      event.preventDefault();
+      event.stopPropagation();
+      openEditionsPanel(state, record.marker);
+    });
+    shadow.append(style, marker);
+    mount.appendChild(host);
+    const record = { image, bookId: String(bookId), mount, host, marker };
+    if (typeof ResizeObserver === 'function') {
+      record.resizeObserver = new ResizeObserver(() => positionCoverRecord(record));
+      record.resizeObserver.observe(image);
+      record.resizeObserver.observe(mount);
+    }
+    positionCoverRecord(record);
+    return record;
+  }
+
+  function removeCoverRecord(record) {
+    record.resizeObserver?.disconnect();
+    record.host.remove();
+    releaseCoverMount(record.mount);
+  }
+
+  function beginCoverHover(image) {
+    const bookLink = findBookLinkNearImage(image);
+    const bookId = GRPT.extractBookId(bookLink?.href);
+    if (!bookId || !isVisible(image) || !isLikelyBookCover(image)) return;
+    activeCoverImages.add(image);
+    clearTimeout(coverTimers.get(image));
+    coverTimers.set(image, setTimeout(() => {
+      coverTimers.delete(image);
+      if (!activeCoverImages.has(image) || !image.isConnected) return;
+      let record = coverRecords.get(image);
+      if (record && (!record.host.isConnected || !record.mount.contains(image))) {
+        removeCoverRecord(record);
+        coverRecords.delete(image);
+        record = null;
+      }
+      if (!record) {
+        record = createCoverRecord(image, bookId);
+        if (!record) return;
+        coverRecords.set(image, record);
+      } else if (record.bookId !== String(bookId)) {
+        record.bookId = String(bookId);
+        record.marker.hidden = true;
+      }
+      positionCoverRecord(record);
+      renderCoverRecord(record);
+      lookupBook(bookId);
+    }, COVER_HOVER_DELAY_MS));
+  }
+
+  function endCoverHover(image, relatedTarget) {
+    if (relatedTarget instanceof Node && image.contains(relatedTarget)) return;
+    activeCoverImages.delete(image);
+    clearTimeout(coverTimers.get(image));
+    coverTimers.delete(image);
+  }
+
+  function renderCoverRecord(record) {
+    const state = getBookState(record.bookId);
+    if (state?.status === 'error') {
+      record.marker.hidden = true;
       return;
     }
-    openPanel(badge);
+    record.marker.hidden = false;
+    const status = !state || ['queued', 'loading'].includes(state.status) ? 'loading' : state.status;
+    record.marker.className = `cover-marker ${status}`;
+    record.marker.removeAttribute('tabindex');
+    record.marker.replaceChildren();
+    if (status === 'loading') {
+      appendTextElement(record.marker, 'cover-spinner', '');
+      record.marker.setAttribute('role', 'img');
+    } else if (status === 'found') {
+      record.marker.append(createLanguageIcon(state.language));
+      record.marker.setAttribute('role', 'button');
+      record.marker.setAttribute('tabindex', '0');
+    } else {
+      record.marker.textContent = '×';
+      record.marker.setAttribute('role', 'img');
+    }
+    const language = state?.language || selectedLanguage;
+    const label = status === 'loading'
+      ? `Checking for a ${language.label} edition`
+      : status === 'found'
+        ? `${language.label} edition available`
+        : `No ${language.label} edition`;
+    record.marker.setAttribute('aria-label', label);
+    record.marker.title = label;
+    positionCoverRecord(record);
   }
 
-  function openPanel(badge) {
-    const overlay = document.createElement('div');
-    overlay.className = 'grpt-overlay';
-
-    const escHandler = (e) => {
-      if (e.key === 'Escape') closePanel();
-    };
-    
-    function closePanel() {
-      const p = document.querySelector('.grpt-panel');
-      if (p) p.remove();
-      const o = document.querySelector('.grpt-overlay');
-      if (o) o.remove();
-      window.removeEventListener('scroll', closePanel);
-      window.removeEventListener('resize', closePanel);
-      document.removeEventListener('click', outsideClickListener);
-      document.removeEventListener('keydown', escHandler);
+  function positionCoverRecord(record) {
+    if (!isVisible(record.image)) {
+      record.marker.hidden = true;
+      return;
     }
+    const state = getBookState(record.bookId);
+    if (!state || ['queued', 'loading', 'found', 'not-found'].includes(state.status)) record.marker.hidden = false;
+    const imageRect = record.image.getBoundingClientRect();
+    const mountRect = record.mount.getBoundingClientRect();
+    record.host.style.left = `${imageRect.left - mountRect.left - record.mount.clientLeft}px`;
+    record.host.style.top = `${imageRect.top - mountRect.top - record.mount.clientTop}px`;
+    record.host.style.width = `${imageRect.width}px`;
+    record.host.style.height = `${imageRect.height}px`;
+  }
 
-    function outsideClickListener(e) {
-      const panel = document.querySelector('.grpt-panel');
-      if (panel && !panel.contains(e.target) && !e.target.closest('.grpt-badge')) {
-        closePanel();
+  // ── Book page and editions panel ─────────────────────────────
+
+  function getControlLabel(element) {
+    return `${element?.textContent || ''} ${element?.getAttribute?.('aria-label') || ''} ${element?.title || ''}`
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function findMainActionPlacement() {
+    const controls = [...document.querySelectorAll('button, a')].filter(isVisible);
+    const buyControl = controls.find((element) => /buy on amazon|comprar? (?:na|no) amazon|amazon/.test(getControlLabel(element)))
+      || controls.find((element) => /\bkindle\b/.test(getControlLabel(element)))
+      || controls.find((element) => /more options to get the book|get the book/.test(getControlLabel(element)));
+    if (!buyControl) return null;
+
+    const wantControl = controls.find((element) => /want to read|quero ler/.test(getControlLabel(element))) || null;
+    let actionRow = buyControl.parentElement;
+    let current = actionRow;
+    for (let depth = 0; current?.parentElement && depth < 5; depth += 1) {
+      const rect = current.getBoundingClientRect();
+      const containsWant = wantControl && current.contains(wantControl);
+      if (containsWant || rect.height > 120 || rect.width > 420) break;
+      actionRow = current;
+      current = current.parentElement;
+    }
+    if (!actionRow?.parentElement) return null;
+    return { actionRow, buyControl, wantControl };
+  }
+
+  function createMainPill(placement, bookId, workId, pathname) {
+    const host = document.createElement('div');
+    host.dataset.grptMainHost = '';
+    host.style.cssText = 'all:initial;display:block;box-sizing:border-box;flex:0 0 auto;align-self:flex-start;grid-column:1 / -1;';
+    const shadow = host.attachShadow({ mode: 'open' });
+    const sharedStyle = ui.shadow.querySelector('style')?.cloneNode(true);
+    if (sharedStyle) shadow.appendChild(sharedStyle);
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'grpt-badge grpt-loading';
+    button.setAttribute('aria-live', 'polite');
+    button.addEventListener('click', () => {
+      const state = getBookState(bookId);
+      if (state?.status === 'found') openEditionsPanel(state, button);
+      else if (state?.status === 'error') {
+        bookStates.delete(stateKey(String(bookId)));
+        lookupBook(bookId, workId);
       }
+    });
+    shadow.appendChild(button);
+    placement.actionRow.insertAdjacentElement('afterend', host);
+    return {
+      pathname,
+      bookId: String(bookId),
+      workId: String(workId),
+      host,
+      button,
+      ...placement
+    };
+  }
+
+  function applyMainPillLayout(reference) {
+    if (!mainContext || !reference?.isConnected) return;
+    const { actionRow, button, host } = mainContext;
+    const referenceStyle = getComputedStyle(reference);
+    const referenceRect = reference.getBoundingClientRect();
+    const rowRect = actionRow.getBoundingClientRect();
+
+    host.style.width = `${Math.max(rowRect.width, referenceRect.width)}px`;
+    const parentStyle = getComputedStyle(actionRow.parentElement);
+    host.style.marginTop = parseFloat(parentStyle.rowGap || parentStyle.gap || '0') > 0 ? '0' : '8px';
+
+    button.style.width = '100%';
+    button.style.maxWidth = 'none';
+    button.style.height = referenceRect.height > 0 ? `${referenceRect.height}px` : '40px';
+    button.style.minHeight = button.style.height;
+    button.style.padding = referenceStyle.padding;
+    button.style.setProperty('border-radius', '9999px', 'important');
+    button.style.clipPath = 'inset(0 round 9999px)';
+    button.style.webkitClipPath = 'inset(0 round 9999px)';
+    button.style.overflow = 'hidden';
+    button.style.fontFamily = referenceStyle.fontFamily;
+    button.style.fontSize = referenceStyle.fontSize;
+    button.style.fontWeight = referenceStyle.fontWeight;
+    button.style.letterSpacing = referenceStyle.letterSpacing;
+    button.style.lineHeight = referenceStyle.lineHeight;
+  }
+
+  function initMainPage() {
+    const pathname = window.location.pathname;
+    if (!pathname.startsWith('/book/show/')) {
+      if (mainContext) removeMainContext();
+      return;
     }
+    const bookId = GRPT.extractBookId(pathname);
+    const workId = GRPT.extractWorkId(document);
+    const placement = findMainActionPlacement();
+    if (!bookId || !workId || !placement) return;
+    if (mainContext?.pathname === pathname && mainContext.host.isConnected) {
+      syncMainPillLayout();
+      return;
+    }
+    removeMainContext();
+    mainContext = createMainPill(placement, bookId, workId, pathname);
+    syncMainPillLayout();
+    renderMainButton();
+    lookupBook(bookId, workId);
+  }
 
-    document.addEventListener('click', outsideClickListener);
-    document.addEventListener('keydown', escHandler);
-    window.addEventListener('scroll', closePanel, { passive: true });
-    window.addEventListener('resize', closePanel, { passive: true });
-    overlay.addEventListener('click', closePanel);
+  function removeMainContext() {
+    mainContext?.host.remove();
+    mainContext = null;
+    closeEditionsPanel();
+  }
 
-    document.body.appendChild(overlay);
+  function renderMainButton() {
+    if (!mainContext) return;
+    const state = getBookState(mainContext.bookId);
+    const button = mainContext.button;
+    button.className = 'grpt-badge';
+    button.replaceChildren();
+    button.title = '';
+    const language = state?.language || selectedLanguage;
+    if (!state || ['queued', 'loading'].includes(state.status)) {
+      button.classList.add('grpt-loading');
+      appendTextElement(button, 'main-spinner', '');
+      appendTextElement(button, 'grpt-text', `Checking ${language.label} editions…`);
+      button.disabled = true;
+      button.setAttribute('aria-label', `Checking ${language.label} editions`);
+    } else if (state.status === 'found') {
+      button.classList.add('grpt-found');
+      const icon = appendTextElement(button, 'grpt-icon', '');
+      icon.append(createLanguageIcon(language));
+      appendTextElement(button, 'grpt-text', `${language.label} editions`);
+      appendTextElement(button, 'grpt-count', String(state.editions.length));
+      appendTextElement(button, 'grpt-chevron', '›');
+      button.disabled = false;
+      button.setAttribute('aria-label', `${state.editions.length} ${language.label} ${state.editions.length === 1 ? 'edition' : 'editions'}; open list`);
+      button.title = 'Click to view the editions found';
+    } else if (state.status === 'not-found') {
+      button.classList.add('grpt-not-found');
+      appendTextElement(button, 'grpt-icon', '✗');
+      appendTextElement(button, 'grpt-text', `No ${language.label} edition`);
+      button.disabled = true;
+      button.setAttribute('aria-label', `No ${language.label} edition found`);
+    } else {
+      button.classList.add('grpt-error');
+      appendTextElement(button, 'grpt-icon', '⚠');
+      appendTextElement(button, 'grpt-text', 'Could not check — try again');
+      button.disabled = false;
+      button.setAttribute('aria-label', 'Could not check; try again');
+    }
+    syncMainPillLayout();
+  }
 
-    const panel = document.createElement('div');
-    panel.className = 'grpt-panel';
+  function syncMainPillLayout() {
+    if (!mainContext) return;
+    const { button, buyControl } = mainContext;
+    button.hidden = false;
+    applyMainPillLayout(buyControl);
+  }
 
-    const header = document.createElement('div');
-    header.className = 'grpt-panel-header';
-    header.innerHTML = `
-      <div class="grpt-panel-title">
-        <span>🇧🇷</span>
-        <span>Edições em Português</span>
-        <span class="grpt-panel-count">${foundEditions.length}</span>
-      </div>
-      <button class="grpt-panel-close" title="Fechar">✕</button>
-    `;
-    header.querySelector('.grpt-panel-close').addEventListener('click', closePanel);
+  function openEditionsPanel(state, opener = null) {
+    closeEditionsPanel();
+    const language = state.language || selectedLanguage;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    const panel = document.createElement('section');
+    panel.className = 'panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-labelledby', 'grpt-panel-title');
+
+    const header = document.createElement('header');
+    header.className = 'panel-header';
+    const title = document.createElement('h2');
+    title.className = 'panel-title';
+    title.id = 'grpt-panel-title';
+    title.textContent = `${language.flag} ${language.label} editions`;
+    const close = document.createElement('button');
+    close.className = 'panel-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Close');
+    close.textContent = '×';
+    header.append(title, close);
     panel.appendChild(header);
 
-    // Lista de edições
-    const list = document.createElement('div');
-    list.className = 'grpt-panel-list';
-
-    for (const edition of foundEditions) {
-      const item = document.createElement('div');
-      item.className = 'grpt-panel-item';
-
-      // Capa
-      const coverDiv = document.createElement('div');
-      coverDiv.className = 'grpt-panel-cover';
-      if (edition.cover) {
-        const img = document.createElement('img');
-        img.src = edition.cover;
-        img.alt = edition.title;
-        img.loading = 'lazy';
-        // Fallback se a imagem falhar
-        img.addEventListener('error', () => {
-          img.remove();
-          coverDiv.innerHTML = '<span class="grpt-panel-no-cover">📕</span>';
-        });
-        coverDiv.appendChild(img);
-      } else {
-        coverDiv.innerHTML = '<span class="grpt-panel-no-cover">📕</span>';
-      }
-      item.appendChild(coverDiv);
-
-      // Info
-      const info = document.createElement('div');
-      info.className = 'grpt-panel-info';
-
-      const titleEl = document.createElement('p');
-      titleEl.className = 'grpt-panel-item-title';
-      if (edition.url) {
-        const link = document.createElement('a');
-        link.href = edition.url;
-        link.target = '_blank';
-        link.textContent = edition.title;
-        link.style.color = 'inherit';
-        link.style.textDecoration = 'none';
-        link.addEventListener('mouseenter', () => link.style.textDecoration = 'underline');
-        link.addEventListener('mouseleave', () => link.style.textDecoration = 'none');
-        titleEl.appendChild(link);
-      } else {
-        titleEl.textContent = edition.title;
-      }
-      info.appendChild(titleEl);
-
-      if (edition.isbn13) {
-        const isbnRow = document.createElement('div');
-        isbnRow.className = 'grpt-panel-isbn-row';
-
-        const isbnText = document.createElement('span');
-        isbnText.className = 'grpt-panel-isbn';
-        isbnText.textContent = `ISBN-13: ${edition.isbn13}`;
-        isbnRow.appendChild(isbnText);
-
-        const actionsRow = document.createElement('div');
-        actionsRow.className = 'grpt-panel-actions-row';
-        actionsRow.style.display = 'flex';
-        actionsRow.style.gap = '8px';
-        actionsRow.style.marginTop = '4px';
-
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'grpt-panel-copy';
-        copyBtn.textContent = '📋 Copiar ISBN';
-        copyBtn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          await copyISBN(copyBtn, edition.isbn13);
-        });
-        actionsRow.appendChild(copyBtn);
-
-        const tgBtn = document.createElement('button');
-        tgBtn.className = 'grpt-panel-copy';
-        tgBtn.innerHTML = '✈️ Telegram';
-        tgBtn.title = 'Copiar título e buscar no Telegram';
-        tgBtn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const cleanTitle = edition.title.replace(/\s*\(.*?\)\s*$/, '').trim();
-          await navigator.clipboard.writeText(cleanTitle);
-          tgBtn.textContent = 'Copiado!';
-          setTimeout(() => { tgBtn.innerHTML = '✈️ Telegram'; }, 2000);
-          window.open('https://web.telegram.org/a/#-1001380278130', '_blank');
-        });
-        actionsRow.appendChild(tgBtn);
-
-        info.appendChild(actionsRow);
-      } else {
-        const noIsbn = document.createElement('p');
-        noIsbn.className = 'grpt-panel-no-isbn';
-        noIsbn.textContent = 'ISBN não disponível';
-        info.appendChild(noIsbn);
-
-        const actionsRow = document.createElement('div');
-        actionsRow.className = 'grpt-panel-actions-row';
-        actionsRow.style.display = 'flex';
-        actionsRow.style.gap = '8px';
-        actionsRow.style.marginTop = '4px';
-
-        const tgBtn = document.createElement('button');
-        tgBtn.className = 'grpt-panel-copy';
-        tgBtn.innerHTML = '✈️ Telegram';
-        tgBtn.title = 'Copiar título e buscar no Telegram';
-        tgBtn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const cleanTitle = edition.title.replace(/\s*\(.*?\)\s*$/, '').trim();
-          await navigator.clipboard.writeText(cleanTitle);
-          tgBtn.textContent = 'Copiado!';
-          setTimeout(() => { tgBtn.innerHTML = '✈️ Telegram'; }, 2000);
-          window.open('https://web.telegram.org/a/#-1001380278130', '_blank');
-        });
-        actionsRow.appendChild(tgBtn);
-
-        info.appendChild(actionsRow);
-      }
-
-      if (edition.meta) {
-        const metaEl = document.createElement('p');
-        metaEl.className = 'grpt-panel-meta';
-        metaEl.textContent = edition.meta;
-        info.appendChild(metaEl);
-      }
-
-      item.appendChild(info);
-      list.appendChild(item);
+    if (state.partial) {
+      const note = document.createElement('p');
+      note.className = 'panel-note';
+      note.textContent = 'For safety, only the first page of editions was checked.';
+      panel.appendChild(note);
     }
 
+    const list = document.createElement('ul');
+    list.className = 'edition-list';
+    for (const edition of state.editions) list.appendChild(createEditionRow(edition));
     panel.appendChild(list);
 
-    // Footer com link para página de edições
-    if (editionsPageUrl) {
-      const footer = document.createElement('div');
-      footer.className = 'grpt-panel-footer';
-      const link = document.createElement('a');
-      link.href = editionsPageUrl;
-      link.target = '_blank';
-      link.rel = 'noopener';
-      link.textContent = 'Ver todas as edições no Goodreads ↗';
-      link.className = 'grpt-panel-link';
-      footer.appendChild(link);
-      panel.appendChild(footer);
-    }
+    const footer = document.createElement('footer');
+    footer.className = 'panel-footer';
+    const link = document.createElement('a');
+    link.href = GRPT.buildEditionsUrl(state.workId, language.code);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'View editions on Goodreads ↗';
+    footer.appendChild(link);
+    panel.appendChild(footer);
+    backdrop.appendChild(panel);
+    ui.modalLayer.appendChild(backdrop);
 
-    // Posicionar o painel abaixo do badge
-    document.body.appendChild(panel);
-    positionPanel(panel, badge);
-  }
-
-  function positionPanel(panel, badge) {
-    const rect = badge.getBoundingClientRect();
-    const panelWidth = 360;
-    const maxHeight = 420;
-
-    // Posição preferida: abaixo e alinhado à esquerda do badge
-    let top = rect.bottom + window.scrollY + 8;
-    let left = rect.left + window.scrollX;
-
-    // Ajustar se sair da tela pela direita
-    if (left + panelWidth > window.innerWidth - 16) {
-      left = window.innerWidth - panelWidth - 16 + window.scrollX;
-    }
-
-    // Ajustar se sair da tela por baixo — abrir acima do badge
-    if (rect.bottom + maxHeight > window.innerHeight) {
-      top = rect.top + window.scrollY - maxHeight - 8;
-      if (top < window.scrollY) top = rect.bottom + window.scrollY + 8;
-    }
-
-    panel.style.top = `${top}px`;
-    panel.style.left = `${left}px`;
-  }
-
-  // ── 6. Copiar ISBN ────────────────────────────────────────────
-
-  async function copyISBN(button, isbn) {
-    try {
-      await navigator.clipboard.writeText(isbn);
-    } catch (err) {
-      console.error('[Goodreads PT] Erro ao copiar ISBN:', err);
-    }
-    const original = button.textContent;
-    button.textContent = '✓ Copiado!';
-    button.classList.add('grpt-panel-copy-done');
-    setTimeout(() => {
-      button.textContent = original;
-      button.classList.remove('grpt-panel-copy-done');
-    }, 2000);
-  }
-
-  // ── 7. Fluxo principal ────────────────────────────────────────
-
-  async function initExtension() {
-    if (isChecking) return;
-
-    // Só executar em páginas de livro
-    if (!window.location.pathname.includes('/book/show/')) return;
-
-    const existingBadge = document.querySelector('.grpt-badge');
-
-    // Se o badge já existe E a URL não mudou, estamos prontos
-    if (existingBadge && currentPathname === window.location.pathname) {
-      return;
-    }
-
-    // Se a URL mudou (navegação SPA), resetar o estado
-    if (currentPathname !== window.location.pathname) {
-      currentPathname = window.location.pathname;
-      if (existingBadge) existingBadge.remove();
-      const existingPanel = document.querySelector('.grpt-panel');
-      if (existingPanel) existingPanel.remove();
-      foundEditions = [];
-      editionsPageUrl = '';
-    }
-
-    const amazonContainer = findAmazonButton();
-    if (!amazonContainer) {
-      // Deixa para a próxima mutação do DOM
-      return;
-    }
-
-    // Se já inserimos o badge ao lado deste container, aborta
-    if (amazonContainer.parentElement && amazonContainer.parentElement.querySelector('.grpt-badge')) {
-      return;
-    }
-
-    isChecking = true;
-
-    // Em vez de replaceWith (que quebra o React), escondemos o original
-    amazonContainer.style.display = 'none';
-
-    // Inserir badge de loading
-    let currentBadge = createBadge('loading');
-    amazonContainer.parentNode.insertBefore(currentBadge, amazonContainer);
-
-    const updateBadge = (newBadge) => {
-      if (currentBadge.parentNode) {
-        currentBadge.replaceWith(newBadge);
-        currentBadge = newBadge;
+    const keyHandler = (event) => {
+      if (event.key === 'Escape') {
+        closeEditionsPanel();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...panel.querySelectorAll('button:not([disabled]), a[href]')]
+        .filter((element) => !element.hidden);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = panel.getRootNode().activeElement;
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
-
-    const bookIdMatch = window.location.pathname.match(/\/book\/show\/(\d+)/);
-    const bookId = bookIdMatch ? bookIdMatch[1] : null;
-
-    if (bookId && bookCache.has(bookId)) {
-      const cached = bookCache.get(bookId);
-      if (cached.status === 'found') {
-        foundEditions = cached.editions;
-        updateBadge(createBadge('found', foundEditions));
-        isChecking = false;
-        return;
-      } else if (cached.status === 'not-found') {
-        updateBadge(createBadge('not-found'));
-        isChecking = false;
-        return;
-      }
-    }
-
-    try {
-      const workId = extractWorkId();
-      if (!workId) {
-        updateBadge(createBadge('error'));
-        console.error('[Goodreads PT] work_id não encontrado.');
-        isChecking = false;
-        return;
-      }
-
-      editionsPageUrl = `/work/editions/${workId}?utf8=%E2%9C%93&sort=num_ratings&filter_by_format=&filter_by_language=por`;
-
-      const response = await fetch(editionsPageUrl);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const html = await response.text();
-      foundEditions = parseEditions(html);
-
-      const bookIdMatch = window.location.pathname.match(/\/book\/show\/(\d+)/);
-      const bookId = bookIdMatch ? bookIdMatch[1] : null;
-
-      if (foundEditions.length === 0) {
-        if (bookId) {
-          bookCache.set(bookId, { status: 'not-found', editions: [] });
-        }
-        updateBadge(createBadge('not-found'));
-      } else {
-        if (bookId) {
-          const cacheData = { status: 'found', editions: foundEditions };
-          bookCache.set(bookId, cacheData);
-          persistBookIfFound(bookId, cacheData);
-        }
-        updateBadge(createBadge('found', foundEditions));
-      }
-
-    } catch (err) {
-      console.error('[Goodreads PT] Erro:', err);
-      updateBadge(createBadge('error'));
-    }
-
-    isChecking = false;
+    close.addEventListener('click', closeEditionsPanel);
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) closeEditionsPanel();
+    });
+    document.addEventListener('keydown', keyHandler);
+    panelContext = { backdrop, keyHandler, opener: opener || mainContext?.button };
+    close.focus();
   }
 
-  // ── 8. Lógica de Injeção no Tooltip (Listas e Prêmios) ────────
+  function createEditionRow(edition) {
+    const item = document.createElement('li');
+    item.className = 'edition';
+    if (edition.cover) {
+      const cover = document.createElement('img');
+      cover.className = 'edition-cover';
+      cover.src = edition.cover;
+      cover.alt = `Cover of ${edition.title}`;
+      cover.loading = 'lazy';
+      item.appendChild(cover);
+    } else {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'edition-cover';
+      item.appendChild(placeholder);
+    }
+    const info = document.createElement('div');
+    info.className = 'edition-info';
+    const title = document.createElement('p');
+    title.className = 'edition-title';
+    if (edition.url) {
+      const link = document.createElement('a');
+      link.href = edition.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = edition.title;
+      title.appendChild(link);
+    } else title.textContent = edition.title;
+    info.appendChild(title);
+    if (edition.meta) {
+      const meta = document.createElement('p');
+      meta.className = 'edition-meta';
+      meta.textContent = edition.meta;
+      info.appendChild(meta);
+    }
+    const isbn = document.createElement('p');
+    isbn.className = 'edition-isbn';
+    isbn.textContent = edition.isbn13 ? `ISBN-13: ${edition.isbn13}` : 'ISBN unavailable';
+    info.appendChild(isbn);
+    item.appendChild(info);
+    return item;
+  }
 
-  function detectAndHandleTooltip() {
-    // Buscar todos os elementos da sinopse (freeTextContainer) no DOM
-    const freeTextSpans = Array.from(document.querySelectorAll('span[id^="freeTextContainer"]'));
-    
-    for (const activeSpan of freeTextSpans) {
-      // Remover "body" para não dar match na página inteira e injetar em lugares errados (como quotes)
-      const container = activeSpan.closest('.prototip_StemWrapper, .tooltip, div[class*="tooltip" i]');
-      if (!container) continue;
+  function closeEditionsPanel() {
+    if (!panelContext) return;
+    document.removeEventListener('keydown', panelContext.keyHandler);
+    panelContext.backdrop.remove();
+    const opener = panelContext.opener;
+    panelContext = null;
+    if (opener?.isConnected) opener.focus();
+  }
 
-      // Extrair o ID do livro a partir do link do título dentro do próprio tooltip
-      const bookLink = container.querySelector('a[href*="/book/show/"]');
-      if (!bookLink) continue;
+  function scheduleMainInit(delayMs = 120) {
+    clearTimeout(mainInitTimer);
+    mainInitTimer = setTimeout(() => {
+      mainInitTimer = null;
+      initMainPage();
+    }, delayMs);
+  }
 
-      const match = bookLink.href.match(/\/book\/show\/(\d+)/);
-      if (!match) continue;
-
-      const bookId = match[1];
-
-      if (!bookCache.has(bookId)) {
-        fetchQueue.enqueue(bookId, container, activeSpan);
-      } else {
-        updateActiveTooltip(bookId, container, activeSpan);
-      }
+  function applyLanguage(language) {
+    const nextLanguage = GRPT.Settings.normalizeLanguage(language);
+    if (nextLanguage.code === selectedLanguage.code) return;
+    selectedLanguage = nextLanguage;
+    closeEditionsPanel();
+    for (const record of coverRecords.values()) removeCoverRecord(record);
+    coverRecords.clear();
+    if (mainContext) {
+      renderMainButton();
+      lookupBook(mainContext.bookId, mainContext.workId);
     }
   }
 
-  async function fetchEditionsForTooltip(bookId, container, activeSpan) {
-    bookCache.set(bookId, { status: 'loading', editions: [] });
-    updateActiveTooltip(bookId, container, activeSpan);
+  // ── Events and maintenance ───────────────────────────────────
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+  document.addEventListener('mouseover', (event) => {
+    const image = event.target.closest?.('img');
+    if (image && image !== event.relatedTarget) beginCoverHover(image);
+  }, { passive: true });
 
-    try {
-      // 1. Obter a página principal do livro para extrair o work_id
-      const bookUrl = `/book/show/${bookId}`;
-      const bookRes = await fetch(bookUrl, { signal: controller.signal });
-      if (!bookRes.ok) throw new Error('Falha ao buscar book page');
-      const bookHtml = await bookRes.text();
-      
-      const fakeDoc = document.createElement('div');
-      fakeDoc.innerHTML = bookHtml;
-      const workId = extractWorkId(fakeDoc, bookHtml);
+  document.addEventListener('mouseout', (event) => {
+    const image = event.target.closest?.('img');
+    if (image) endCoverHover(image, event.relatedTarget);
+  }, { passive: true });
 
-      if (!workId) {
-        bookCache.set(bookId, { status: 'not-found', editions: [] });
-        updateActiveTooltip(bookId, container, activeSpan);
-        clearTimeout(timeoutId);
-        return;
-      }
-
-      // 2. Buscar a página de edições
-      const editionsUrl = `/work/editions/${workId}?utf8=%E2%9C%93&sort=num_ratings&filter_by_format=&filter_by_language=por`;
-      const edRes = await fetch(editionsUrl, { signal: controller.signal });
-      if (!edRes.ok) throw new Error('Falha ao buscar edições');
-      const edHtml = await edRes.text();
-
-      const editions = parseEditions(edHtml);
-
-      const cacheData = { 
-        status: editions.length > 0 ? 'found' : 'not-found', 
-        editions 
-      };
-      
-      bookCache.set(bookId, cacheData);
-      persistBookIfFound(bookId, cacheData);
-
-    } catch (err) {
-      console.error('[Goodreads PT] Erro background fetch:', err);
-      bookCache.set(bookId, { status: 'error', editions: [] });
-    } finally {
-      clearTimeout(timeoutId);
-      updateActiveTooltip(bookId, container, activeSpan);
-    }
-  }
-
-  function updateActiveTooltip(bookId, container, activeSpan) {
-    if (!container || !activeSpan) return;
-
-    const tooltip = activeSpan.parentElement;
-
-    let badgeContainer = tooltip.querySelector('.grpt-tooltip-container');
-    if (!badgeContainer) {
-      badgeContainer = document.createElement('div');
-      badgeContainer.className = 'grpt-tooltip-container';
-      badgeContainer.style.marginBottom = '10px';
-      badgeContainer.style.paddingBottom = '10px';
-      badgeContainer.style.borderBottom = '1px solid #e8e8e8';
-      badgeContainer.style.fontFamily = 'Lato, "Helvetica Neue", Helvetica, sans-serif';
-      
-      // Inserir logo ANTES do texto da sinopse
-      tooltip.insertBefore(badgeContainer, activeSpan);
-    }
-
-    const data = bookCache.get(bookId);
-    if (!data) return;
-
-    let newHtml = '';
-    if (data.status === 'loading') {
-      newHtml = '<span style="color: #767676; font-size: 12px;">⏳ Buscando edição PT-BR...</span>';
-    } else if (data.status === 'error') {
-      newHtml = '<span style="color: #d13515; font-size: 12px;">⚠️ Demorou muito ou falhou a busca.</span>';
-    } else if (data.status === 'not-found') {
-      newHtml = '<span style="color: #e25950; font-size: 12px;">✗ Sem edição em português.</span>';
-    } else if (data.status === 'found') {
-      const ed = data.editions[0];
-      newHtml = `
-        <div style="display: flex; gap: 8px; align-items: flex-start; text-align: left;">
-          <span style="font-size: 18px; line-height: 1;">🇧🇷</span>
-          <div style="flex: 1;">
-            <strong style="color: #00635d; display: block; margin-bottom: 2px; font-size: 13px;">Edição PT-BR Disponível!</strong>
-            <span style="font-size: 12px; color: #333; font-weight: bold; display: block; margin-bottom: 2px;">${ed.title}</span>
-            <span style="font-size: 11px; color: #767676; display: block;">${ed.meta || 'Informações adicionais indisponíveis'}</span>
-          </div>
-        </div>
-      `;
-    }
-
-    if (badgeContainer.innerHTML !== newHtml) {
-      badgeContainer.innerHTML = newHtml;
-    }
-  }
-
-  // ── 9. Observador de Mutações ─────────────────────────────────
-  const debouncedInit = debounce(() => {
-    initExtension();
-    detectAndHandleTooltip();
-  }, 150);
-
-  const observer = new MutationObserver((mutations) => {
-    debouncedInit();
+  const observer = new MutationObserver(() => {
+    scheduleMainInit();
   });
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  observer.observe(document.body, { childList: true, subtree: true });
 
-  // Executar imediatamente caso o DOM já esteja pronto
-  initExtension();
+  function maintainCoverRecords(reposition = false) {
+    for (const [image, record] of coverRecords) {
+      if (!image.isConnected) {
+        removeCoverRecord(record);
+        coverRecords.delete(image);
+      } else if (reposition) positionCoverRecord(record);
+    }
+  }
 
+  function handleResize() {
+    maintainCoverRecords(true);
+    syncMainPillLayout();
+  }
+  window.addEventListener('resize', handleResize);
+  window.addEventListener('popstate', () => scheduleMainInit(0));
+  setInterval(() => {
+    maintainCoverRecords(false);
+    const pathname = window.location.pathname;
+    if (pathname !== observedPathname) {
+      observedPathname = pathname;
+      scheduleMainInit(0);
+    }
+  }, 1000);
+
+  chrome.storage?.onChanged?.addListener((changes) => {
+    const nextCode = changes?.[GRPT.Settings.KEY]?.newValue?.languageCode;
+    if (nextCode) applyLanguage(nextCode);
+  });
+
+  GRPT.Settings.getLanguage()
+    .then((language) => {
+      selectedLanguage = language;
+      scheduleMainInit(0);
+    })
+    .catch(() => scheduleMainInit(0));
 })();

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>GRPT main not-found badge test</title>
+</head>
+<body>
+  <main>
+    <div id="actions">
+      <button id="want-button" style="width:220px;height:40px;padding:8px 16px;color:white;background:#3f8363;border:1px solid #3f8363;border-radius:20px;font:600 14px Arial">Want to Read</button>
+      <div id="buy-row" style="display:flex;width:220px;height:40px;margin-top:8px">
+        <a id="buy-button" href="https://www.amazon.com/" style="display:flex;align-items:center;justify-content:center;width:220px;height:40px;padding:8px 16px;box-sizing:border-box;color:#382110;background:#f4f1ea;border:1px solid #d6d0c4;border-radius:20px;font:600 14px Arial;text-decoration:none">Buy on Amazon</a>
+      </div>
+    </div>
+    <div class="Button__container"><button aria-label="Book details and editions">Book details &amp; editions</button></div>
+    <a href="/work/quotes/1001">Quotes</a>
+  </main>
+  <pre id="result">Executando…</pre>
+  <script>
+    (async () => {
+      history.replaceState({}, '', '/book/show/125');
+      const originalFetch = window.fetch.bind(window);
+      const noPortugueseHtml = await originalFetch('/tests/fixtures/no-portuguese.html').then((response) => response.text());
+      const storage = {};
+      window.chrome = {
+        runtime: { onMessage: { addListener() {} } },
+        storage: {
+          local: {
+            async get(key) { return { [key]: storage[key] }; },
+            async set(value) { Object.assign(storage, value); },
+            async remove(key) { delete storage[key]; }
+          }
+        }
+      };
+      const requestedUrls = [];
+      window.fetch = async (url) => {
+        requestedUrls.push(String(url));
+        return { ok: true, status: 200, text: async () => noPortugueseHtml };
+      };
+      const loadScript = (src) => new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+      await loadScript('/shared.js');
+      await loadScript('/content.js');
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+
+      const mainHost = document.querySelector('[data-grpt-main-host]');
+      const mainShadow = mainHost?.shadowRoot;
+      const badge = mainShadow?.querySelector('.grpt-badge.grpt-not-found');
+      const checks = {
+        badgeUsesRequestedFormat: Boolean(badge),
+        badgeBelowBuy: mainHost?.previousElementSibling === document.getElementById('buy-row'),
+        badgeKeepsNativeHeight: getComputedStyle(badge).height === getComputedStyle(document.getElementById('buy-button')).height,
+        badgeUsesOwnNeutralColor: getComputedStyle(badge).backgroundColor === 'rgb(245, 243, 240)'
+          && getComputedStyle(badge).backgroundColor !== getComputedStyle(document.getElementById('buy-button')).backgroundColor,
+        badgeCornersAreSymmetric: getComputedStyle(badge).borderTopLeftRadius === getComputedStyle(badge).borderTopRightRadius
+          && getComputedStyle(badge).borderTopRightRadius === getComputedStyle(badge).borderBottomRightRadius
+          && getComputedStyle(badge).borderBottomRightRadius === getComputedStyle(badge).borderBottomLeftRadius,
+        badgeUsesSymmetricClip: getComputedStyle(badge).clipPath !== 'none',
+        xIcon: badge?.querySelector('.grpt-icon')?.textContent === '✗',
+        exactText: badge?.querySelector('.grpt-text')?.textContent === 'No Portuguese edition',
+        oneRequestOnly: requestedUrls.length === 1,
+        goodreadsStylesUntouched: !document.querySelector('.grpt-badge, .grpt-icon, .grpt-text')
+      };
+      const passed = Object.values(checks).every(Boolean);
+      document.body.dataset.status = passed ? 'passed' : 'failed';
+      document.getElementById('result').textContent = JSON.stringify({ passed, requestedUrls, checks }, null, 2);
+    })().catch((error) => {
+      document.body.dataset.status = 'failed';
+      document.getElementById('result').textContent = error.stack || String(error);
+    });
+  </script>
+</body>
+</html>

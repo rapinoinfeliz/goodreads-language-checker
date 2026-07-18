@@ -1,34 +1,30 @@
 {
   "manifest_version": 3,
-  "name": "Goodreads PT Edition Checker",
-  "version": "1.1.0",
-  "description": "Detecta se existe edição em português de um livro no Goodreads e permite copiar o ISBN-13.",
+  "name": "Goodreads Edition Language Checker",
+  "version": "4.2.0",
+  "description": "Checks on demand for editions in a selected language and discreetly marks book covers on Goodreads.",
+  "homepage_url": "https://github.com/rapinoinfeliz/goodreads-language-checker",
 
   "permissions": [
-    "tabs",
-    "scripting"
-  ],
-
-  "host_permissions": [
-    "https://www.goodreads.com/*"
+    "storage"
   ],
 
   "content_scripts": [
     {
       "matches": ["https://www.goodreads.com/*"],
       "js": ["shared.js", "content.js"],
-      "css": ["content.css"],
       "run_at": "document_idle"
     }
   ],
 
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Verificar edição PT"
+    "default_title": "Choose edition language"
   },
 
   "icons": {
     "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   }

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>GRPT browser tests</title></head>
+<body>
+  <pre id="result">Executando…</pre>
+  <script src="../shared.js"></script>
+  <script>
+    (async () => {
+      const names = ['portuguese-page-1.html', 'mixed-languages.html', 'no-portuguese.html', 'spanish-page.html'];
+      const html = Object.fromEntries(await Promise.all(names.map(async (name) => [
+        name,
+        await fetch(`fixtures/${name}`).then((response) => response.text())
+      ])));
+      const first = GRPT.parseEditionsPage(html['portuguese-page-1.html']);
+      const mixed = GRPT.parseEditionsPage(html['mixed-languages.html']);
+      const absent = GRPT.parseEditionsPage(html['no-portuguese.html']);
+      const spanish = GRPT.parseEditionsPage(html['spanish-page.html'], { languageCode: 'spa' });
+      const checks = {
+        firstEdition: first.editions.length === 1 && first.editions[0].bookId === '101',
+        nextPage: first.nextPageUrl?.includes('page=2') === true,
+        languageFilter: mixed.editions.length === 1 && mixed.editions[0].bookId === '405',
+        absentLanguage: absent.hasLanguage === false && absent.editions.length === 0,
+        selectedLanguage: spanish.hasLanguage === true && spanish.editions[0]?.bookId === '303',
+        selectedLanguageUrl: GRPT.buildEditionsUrl('999', 'spa').includes('filter_by_language=spa'),
+        safeUrl: GRPT.sanitizeEdition({ title: 'X', url: 'javascript:alert(1)' }).url === null
+      };
+      const passed = Object.values(checks).every(Boolean);
+      document.body.dataset.status = passed ? 'passed' : 'failed';
+      document.getElementById('result').textContent = JSON.stringify({ passed, checks }, null, 2);
+    })().catch((error) => {
+      document.body.dataset.status = 'failed';
+      document.getElementById('result').textContent = error.stack || String(error);
+    });
+  </script>
+</body>
+</html>

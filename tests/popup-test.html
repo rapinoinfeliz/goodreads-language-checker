@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Popup test</title></head>
+<body>
+  <label for="language-select"><span>Edition language</span><select id="language-select" disabled></select></label>
+  <button id="clear-cache" type="button">Clear cache</button>
+  <pre id="result">Running…</pre>
+  <script>
+    const localValues = {
+      grpt_cache_v4: { version: 4, entries: { 'por:999': { status: 'not-found' } }, bookToWork: {} }
+    };
+    const syncValues = { grpt_settings_v1: { languageCode: 'por' } };
+    const storageArea = (values) => ({
+      async get(key) { return { [key]: values[key] }; },
+      async set(update) { Object.assign(values, update); },
+      async remove(keys) {
+        for (const key of Array.isArray(keys) ? keys : [keys]) delete values[key];
+      }
+    });
+    window.chrome = {
+      storage: {
+        local: storageArea(localValues),
+        sync: storageArea(syncValues)
+      }
+    };
+  </script>
+  <script src="../shared.js"></script>
+  <script src="../popup.js"></script>
+  <script>
+    (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const select = document.getElementById('language-select');
+      const clear = document.getElementById('clear-cache');
+      const initialChecks = {
+        onlyTwoControls: document.querySelectorAll('select, button, input, a').length === 2,
+        allLanguages: select.options.length === 58,
+        englishLabels: select.options[select.selectedIndex]?.textContent.includes('Portuguese') === true,
+        portugueseDefault: select.value === 'por',
+        enabled: select.disabled === false
+      };
+
+      select.value = 'spa';
+      select.dispatchEvent(new Event('change'));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      clear.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const checks = {
+        ...initialChecks,
+        languageSaved: syncValues.grpt_settings_v1?.languageCode === 'spa',
+        cacheCleared: localValues.grpt_cache_v4 === undefined,
+        englishFeedback: clear.textContent === 'Cache cleared'
+      };
+      const passed = Object.values(checks).every(Boolean);
+      document.body.dataset.status = passed ? 'passed' : 'failed';
+      document.getElementById('result').textContent = JSON.stringify({ passed, checks }, null, 2);
+    })().catch((error) => {
+      document.body.dataset.status = 'failed';
+      document.getElementById('result').textContent = error.stack || String(error);
+    });
+  </script>
+</body>
+</html>

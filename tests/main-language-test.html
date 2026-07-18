@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>GRPT selected language test</title></head>
+<body>
+  <main>
+    <div id="actions">
+      <button id="want-button" style="width:220px;height:40px;padding:8px 16px;color:white;background:#3f8363;border:1px solid #3f8363;border-radius:20px;font:600 14px Arial">Want to Read</button>
+      <div id="buy-row" style="display:flex;width:220px;height:40px;margin-top:8px">
+        <a id="buy-button" href="https://www.amazon.com/" style="display:flex;align-items:center;justify-content:center;width:220px;height:40px;padding:8px 16px;box-sizing:border-box;color:#382110;background:#f4f1ea;border:1px solid #d6d0c4;border-radius:20px;font:600 14px Arial;text-decoration:none">Buy on Amazon</a>
+      </div>
+    </div>
+    <a href="/work/quotes/999">Quotes</a>
+  </main>
+  <pre id="result">Executando…</pre>
+  <script>
+    (async () => {
+      history.replaceState({}, '', '/book/show/123');
+      const originalFetch = window.fetch.bind(window);
+      const editionHtml = await originalFetch('/tests/fixtures/spanish-page.html').then((response) => response.text());
+      const storage = { grpt_settings_v1: { languageCode: 'spa' } };
+      window.chrome = {
+        runtime: { onMessage: { addListener() {} } },
+        storage: {
+          local: {
+            async get(key) { return { [key]: storage[key] }; },
+            async set(value) { Object.assign(storage, value); },
+            async remove(keys) { for (const key of Array.isArray(keys) ? keys : [keys]) delete storage[key]; }
+          }
+        }
+      };
+      const requestedUrls = [];
+      window.fetch = async (url) => {
+        requestedUrls.push(String(url));
+        return { ok: true, status: 200, text: async () => editionHtml };
+      };
+      const loadScript = (src) => new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+      await loadScript('/shared.js');
+      await loadScript('/content.js');
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+
+      const mainHost = document.querySelector('[data-grpt-main-host]');
+      const badge = mainHost?.shadowRoot?.querySelector('.grpt-badge');
+      badge?.click();
+      const panelLink = document.getElementById('grpt-extension-root')?.shadowRoot?.querySelector('.panel-footer a');
+      const checks = {
+        spanishText: badge?.textContent.includes('Spanish editions') === true,
+        spanishFlag: badge?.querySelector('.language-flag')?.textContent === '🇪🇸',
+        spanishRequest: requestedUrls.length === 1 && requestedUrls[0].includes('filter_by_language=spa'),
+        spanishPanelLink: panelLink?.href.includes('filter_by_language=spa') === true
+      };
+      const passed = Object.values(checks).every(Boolean);
+      document.body.dataset.status = passed ? 'passed' : 'failed';
+      document.getElementById('result').textContent = JSON.stringify({ passed, requestedUrls, checks }, null, 2);
+    })().catch((error) => {
+      document.body.dataset.status = 'failed';
+      document.getElementById('result').textContent = error.stack || String(error);
+    });
+  </script>
+</body>
+</html>
