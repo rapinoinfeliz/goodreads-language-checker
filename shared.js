@@ -20,6 +20,10 @@
   const MAX_CACHE_BYTES = 4 * 1024 * 1024;
   const DEFAULT_MAX_PAGES = 1;
 
+  let memoryCache = null;
+  let cacheLoadPromise = null;
+  let cacheGeneration = 0;
+
   const LANGUAGES = Object.freeze([
     ['afr', 'Afrikaans', '🇿🇦'],
     ['sqi', 'Albanian', '🇦🇱'],
@@ -497,25 +501,41 @@
     return { version: CACHE_VERSION, entries: {}, bookToWork: {} };
   }
 
-  async function readCache() {
-    if (!root.chrome?.storage?.local) return emptyCache();
-    try {
-      const result = await root.chrome.storage.local.get(CACHE_KEY);
-      const value = result?.[CACHE_KEY];
-      if (!value || value.version !== CACHE_VERSION || typeof value.entries !== 'object') {
-        return emptyCache();
-      }
-      return {
-        version: CACHE_VERSION,
-        entries: value.entries || {},
-        bookToWork: value.bookToWork && typeof value.bookToWork === 'object' ? value.bookToWork : {}
-      };
-    } catch {
+  function normalizeCache(value) {
+    if (!value || value.version !== CACHE_VERSION || typeof value.entries !== 'object') {
       return emptyCache();
     }
+    return {
+      version: CACHE_VERSION,
+      entries: value.entries || {},
+      bookToWork: value.bookToWork && typeof value.bookToWork === 'object' ? value.bookToWork : {}
+    };
+  }
+
+  async function readCache() {
+    if (memoryCache) return memoryCache;
+    if (cacheLoadPromise) return cacheLoadPromise;
+    if (!root.chrome?.storage?.local) {
+      memoryCache = emptyCache();
+      return memoryCache;
+    }
+    const generation = cacheGeneration;
+    cacheLoadPromise = (async () => {
+      try {
+        const result = await root.chrome.storage.local.get(CACHE_KEY);
+        if (generation === cacheGeneration) memoryCache = normalizeCache(result?.[CACHE_KEY]);
+      } catch {
+        if (generation === cacheGeneration) memoryCache = emptyCache();
+      } finally {
+        cacheLoadPromise = null;
+      }
+      return memoryCache || emptyCache();
+    })();
+    return cacheLoadPromise;
   }
 
   async function writeCache(cache) {
+    memoryCache = cache;
     if (!root.chrome?.storage?.local) return false;
     try {
       await root.chrome.storage.local.set({ [CACHE_KEY]: cache });
@@ -551,6 +571,11 @@
     return `${normalizeLanguage(languageCode).code}:${workId}`;
   }
 
+  function getFreshWorkFromCache(cache, workId, languageCode) {
+    if (!/^\d+$/.test(String(workId || ''))) return null;
+    return sanitizeCacheEntry(cache.entries[getWorkCacheKey(String(workId), languageCode)]);
+  }
+
   function pruneCacheEntries(entries) {
     const ordered = Object.entries(entries)
       .filter(([, entry]) => isFreshEntry(entry))
@@ -568,9 +593,8 @@
   }
 
   async function getCachedWork(workId, languageCode = DEFAULT_LANGUAGE_CODE) {
-    if (!/^\d+$/.test(String(workId || ''))) return null;
     const cache = await readCache();
-    return sanitizeCacheEntry(cache.entries[getWorkCacheKey(String(workId), languageCode)]);
+    return getFreshWorkFromCache(cache, workId, languageCode);
   }
 
   async function setCachedWork(workId, data, languageCode = DEFAULT_LANGUAGE_CODE) {
@@ -591,10 +615,26 @@
   async function getWorkIdForBook(bookId) {
     if (!/^\d+$/.test(String(bookId || ''))) return null;
     const cache = await readCache();
+    return getFreshWorkIdFromCache(cache, bookId);
+  }
+
+  function getFreshWorkIdFromCache(cache, bookId) {
     const mapping = cache.bookToWork[String(bookId)];
     if (!mapping || !/^\d+$/.test(String(mapping.workId || ''))) return null;
     if (Date.now() - Number(mapping.updatedAt || 0) > FOUND_TTL_MS) return null;
     return String(mapping.workId);
+  }
+
+  async function resolveCachedBook(bookId, languageCode = DEFAULT_LANGUAGE_CODE, knownWorkId = null) {
+    if (!/^\d+$/.test(String(bookId || ''))) return { workId: null, cachedResult: null };
+    const cache = await readCache();
+    const workId = /^\d+$/.test(String(knownWorkId || ''))
+      ? String(knownWorkId)
+      : getFreshWorkIdFromCache(cache, bookId);
+    return {
+      workId,
+      cachedResult: workId ? getFreshWorkFromCache(cache, workId, languageCode) : null
+    };
   }
 
   async function setWorkIdForBook(bookId, workId) {
@@ -609,11 +649,56 @@
     await writeCache(cache);
   }
 
+  async function setCachedLookup(bookId, workId, data, languageCode = DEFAULT_LANGUAGE_CODE) {
+    if (!/^\d+$/.test(String(bookId || '')) || !/^\d+$/.test(String(workId || ''))) return;
+    const cache = await readCache();
+    const now = Date.now();
+    const editions = deduplicateEditions(Array.isArray(data?.editions) ? data.editions : []);
+    const status = editions.length ? 'found' : 'not-found';
+
+    cache.entries[getWorkCacheKey(String(workId), languageCode)] = {
+      status,
+      editions: status === 'found' ? editions : [],
+      partial: Boolean(data?.partial),
+      updatedAt: now
+    };
+    cache.entries = pruneCacheEntries(cache.entries);
+
+    const relatedBookIds = new Set([
+      String(bookId),
+      ...editions.map((edition) => edition.bookId).filter((value) => /^\d+$/.test(String(value || '')))
+    ]);
+    for (const relatedBookId of relatedBookIds) {
+      cache.bookToWork[relatedBookId] = { workId: String(workId), updatedAt: now };
+    }
+    cache.bookToWork = Object.fromEntries(
+      Object.entries(cache.bookToWork)
+        .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
+        .slice(0, MAX_BOOK_MAPPINGS)
+    );
+    await writeCache(cache);
+  }
+
+  async function warmCache() {
+    await readCache();
+  }
+
   async function clearCache() {
+    cacheGeneration += 1;
+    memoryCache = emptyCache();
+    cacheLoadPromise = null;
     if (root.chrome?.storage?.local) {
       await root.chrome.storage.local.remove([CACHE_KEY, 'grpt_cache_v3', 'grpt_cache_v2']);
     }
   }
+
+  root.chrome?.storage?.onChanged?.addListener((changes, areaName) => {
+    if (areaName && areaName !== 'local') return;
+    if (!Object.prototype.hasOwnProperty.call(changes || {}, CACHE_KEY)) return;
+    cacheGeneration += 1;
+    memoryCache = normalizeCache(changes[CACHE_KEY]?.newValue);
+    cacheLoadPromise = null;
+  });
 
   root.GRPT = Object.freeze({
     GOODREADS_ORIGIN,
@@ -629,8 +714,11 @@
       clear: clearCache,
       getWork: getCachedWork,
       getWorkIdForBook,
+      resolveBook: resolveCachedBook,
+      setLookup: setCachedLookup,
       setWork: setCachedWork,
-      setWorkIdForBook
+      setWorkIdForBook,
+      warm: warmCache
     }),
     buildEditionsUrl,
     deduplicateEditions,

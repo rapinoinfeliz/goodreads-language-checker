@@ -5,6 +5,7 @@
   <title>GRPT hover test</title>
   <style>
     #cover-image,
+    #cached-cover-image,
     #negative-cover-image { display: block; width: 80px; height: 120px; }
     #avatar-image { display: block; width: 48px; height: 48px; }
   </style>
@@ -16,7 +17,7 @@
       <span id="freeTextContainer123">Sinopse visível</span>
     </div>
   </div>
-  <div id="cover-card">
+  <div id="cover-card" data-work-id="1000">
     <a id="cover-host" href="https://www.goodreads.com/book/show/124-outro"><img id="cover-image" alt="Capa" width="80" height="120"></a>
     <a id="cover-link" href="https://www.goodreads.com/book/show/124-outro">Outro livro</a>
     <a href="https://www.goodreads.com/book/show/124-outro">Detalhes do mesmo livro</a>
@@ -24,6 +25,9 @@
   <div id="negative-cover-card">
     <div><img id="negative-cover-image" alt="Capa sem edição em português" width="80" height="120"></div>
     <a href="https://www.goodreads.com/book/show/125-sem-portugues">Livro sem edição em português</a>
+  </div>
+  <div id="cached-cover-card">
+    <a href="https://www.goodreads.com/book/show/124-outro"><img id="cached-cover-image" alt="Cached cover" width="80" height="120"></a>
   </div>
   <div id="avatar-card">
     <img id="avatar-image" alt="Author avatar" width="48" height="48">
@@ -51,10 +55,10 @@
       window.fetch = async (url) => {
         requests += 1;
         requestedUrls.push(String(url));
+        if (String(url).includes('/work/editions/1000')) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
         if (String(url).includes('/book/show/')) {
-          if (String(url).includes('/124.xml')) {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-          }
           const workId = String(url).includes('/125.xml') ? '1001'
             : String(url).includes('/124.xml') ? '1000' : '999';
           return { ok: true, status: 200, text: async () => `<a href="/work/quotes/${workId}">quotes</a>` };
@@ -101,6 +105,15 @@
         .some((host) => host.shadowRoot?.querySelector('.cover-marker.loading .cover-spinner'));
       await new Promise((resolve) => setTimeout(resolve, 1800));
 
+      const requestsBeforeCachedCover = requests;
+      const cachedCover = document.getElementById('cached-cover-image');
+      cachedCover.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 780));
+      const cachedCoverMarker = [...document.querySelectorAll('[data-grpt-cover-host]')]
+        .find((host) => host.parentElement?.contains(cachedCover))
+        ?.shadowRoot?.querySelector('.cover-marker.found');
+      const requestsAfterCachedCover = requests;
+
       const negativeCover = document.getElementById('negative-cover-image');
       negativeCover.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 2200));
@@ -127,10 +140,13 @@
           && ![...document.querySelectorAll('[data-grpt-cover-host]')]
             .some((host) => host.parentElement?.contains(avatar)),
         tooltipInlineRemoved: !document.querySelector('[data-grpt-tooltip-host], .tooltip-status'),
-        usesWafSafeRoute: requestedUrls[0]?.endsWith('/book/show/124.xml') === true,
+        usesLocalWorkId: requestedUrls[0]?.includes('/work/editions/1000') === true
+          && !requestedUrls.some((url) => url.endsWith('/book/show/124.xml')),
         shortCoverHoverDoesNotRequest: afterShortHover === afterTooltip,
         discreetLoaderShownWhileSearching: loadingMarkerSeen,
-        onlyRequiredCoverRequests: requests === 4,
+        cachedCoverIsImmediate: Boolean(cachedCoverMarker),
+        cachedCoverSkipsNetworkQueue: requestsAfterCachedCover === requestsBeforeCachedCover,
+        onlyRequiredCoverRequests: requests === 3,
         coverFlagAdded: coverMarkers.some((marker) => marker?.classList.contains('found')
           && marker.textContent.trim() === '' && marker.querySelector('.brazil-flag')),
         coverXAdded: coverMarkers.some((marker) => marker?.classList.contains('not-found') && marker.textContent === '×'),

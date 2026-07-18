@@ -15,6 +15,7 @@
   const bookStates = new Map();
   const coverRecords = new Map();
   const coverTimers = new WeakMap();
+  const coverPreflights = new WeakMap();
   const activeCoverImages = new WeakSet();
   const coverMountStates = new WeakMap();
 
@@ -27,6 +28,7 @@
   let selectedLanguage = GRPT.Settings.normalizeLanguage(GRPT.Settings.DEFAULT_LANGUAGE_CODE);
 
   const ui = createIsolatedUI();
+  const cacheReady = GRPT.Cache.warm().catch(() => {});
 
   function createIsolatedUI() {
     const host = document.createElement('div');
@@ -190,29 +192,30 @@
     if (mainContext?.bookId === bookId) renderMainButton();
   }
 
-  function lookupBook(bookId, knownWorkId = null) {
-    const key = String(bookId);
-    const language = selectedLanguage;
-    const existing = getBookState(key);
-    if (existing?.status) return existing.promise || Promise.resolve(existing);
+  function applyCachedResult(bookId, state, cached) {
+    state.status = cached.status;
+    state.editions = cached.editions;
+    state.partial = Boolean(cached.partial);
+    setBookState(bookId, state);
+    return state;
+  }
 
-    const state = { status: 'queued', editions: [], workId: knownWorkId, partial: false, promise: null, language };
-    setBookState(key, state);
-    const promise = requestQueue
+  function enqueueNetworkLookup(bookId, knownWorkId, state) {
+    const networkPromise = requestQueue
       .catch(() => {})
       .then(async () => {
         const wait = Math.max(0, MIN_REQUEST_INTERVAL_MS - (Date.now() - lastRequestStartedAt));
         if (wait) await delay(wait);
         lastRequestStartedAt = Date.now();
         state.status = 'loading';
-        setBookState(key, state);
+        setBookState(bookId, state);
 
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         try {
-          let workId = knownWorkId || await GRPT.Cache.getWorkIdForBook(key);
+          let workId = knownWorkId;
           if (!workId) {
-            const response = await fetch(`/book/show/${key}.xml`, {
+            const response = await fetch(`/book/show/${bookId}.xml`, {
               credentials: 'include',
               signal: controller.signal
             });
@@ -223,40 +226,58 @@
             if (!workId) throw new Error('work_id not found');
           }
           state.workId = String(workId);
-          await GRPT.Cache.setWorkIdForBook(key, state.workId);
 
-          let cached = await GRPT.Cache.getWork(state.workId, language.code);
-          if (!cached) {
-            const result = await GRPT.fetchAllEditions(state.workId, {
-              signal: controller.signal,
-              maxPages: 1,
-              languageCode: language.code
-            });
-            await GRPT.Cache.setWork(state.workId, result, language.code);
-            cached = {
-              status: result.editions.length ? 'found' : 'not-found',
-              editions: result.editions,
-              partial: result.partial
-            };
+          const cached = await GRPT.Cache.getWork(state.workId, state.language.code);
+          if (cached) {
+            await GRPT.Cache.setWorkIdForBook(bookId, state.workId);
+            return applyCachedResult(bookId, state, cached);
           }
 
-          state.status = cached.status;
-          state.editions = cached.editions;
-          state.partial = Boolean(cached.partial);
-          setBookState(key, state);
-          return state;
+          const result = await GRPT.fetchAllEditions(state.workId, {
+            signal: controller.signal,
+            maxPages: 1,
+            languageCode: state.language.code
+          });
+          await GRPT.Cache.setLookup(bookId, state.workId, result, state.language.code);
+          return applyCachedResult(bookId, state, {
+            status: result.editions.length ? 'found' : 'not-found',
+            editions: result.editions,
+            partial: result.partial
+          });
         } catch (error) {
-          console.error('[Goodreads Edition Checker] Failed to check book:', key, error);
+          console.error('[Goodreads Edition Checker] Failed to check book:', bookId, error);
           state.status = 'error';
           state.error = error;
-          setBookState(key, state);
+          setBookState(bookId, state);
           return state;
         } finally {
           clearTimeout(timeout);
         }
       });
+    requestQueue = networkPromise;
+    return networkPromise;
+  }
+
+  function lookupBook(bookId, knownWorkId = null, preflightPromise = null) {
+    const key = String(bookId);
+    const language = selectedLanguage;
+    const existing = getBookState(key);
+    if (existing?.status) return existing.promise || Promise.resolve(existing);
+
+    const state = { status: 'queued', editions: [], workId: knownWorkId, partial: false, promise: null, language };
+    setBookState(key, state);
+    const promise = (async () => {
+      await cacheReady;
+      let resolved = await (preflightPromise
+        || GRPT.Cache.resolveBook(key, language.code, knownWorkId));
+      if (!resolved.cachedResult) {
+        resolved = await GRPT.Cache.resolveBook(key, language.code, knownWorkId || resolved.workId);
+      }
+      state.workId = resolved.workId || knownWorkId;
+      if (resolved.cachedResult) return applyCachedResult(key, state, resolved.cachedResult);
+      return enqueueNetworkLookup(key, state.workId, state);
+    })();
     state.promise = promise;
-    requestQueue = promise;
     return promise;
   }
 
@@ -273,6 +294,27 @@
         if (ids.size === 1) return links[0];
         if (ids.size > 1) return null;
       }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function findWorkIdNearImage(image) {
+    let current = image.parentElement;
+    for (let depth = 0; current && current !== document.body && depth < 6; depth += 1) {
+      const workIds = new Set();
+      const ownWorkId = current.getAttribute('data-work-id') || current.getAttribute('data-workid');
+      if (/^\d+$/.test(String(ownWorkId || ''))) workIds.add(String(ownWorkId));
+      for (const element of current.querySelectorAll('[data-work-id], [data-workid]')) {
+        const value = element.getAttribute('data-work-id') || element.getAttribute('data-workid');
+        if (/^\d+$/.test(String(value || ''))) workIds.add(String(value));
+      }
+      for (const link of current.querySelectorAll('a[href*="/work/"]')) {
+        const workId = GRPT.extractWorkIdFromHtml(link.getAttribute('href') || link.href);
+        if (workId) workIds.add(workId);
+      }
+      if (workIds.size === 1) return [...workIds][0];
+      if (workIds.size > 1) return null;
       current = current.parentElement;
     }
     return null;
@@ -395,10 +437,32 @@
     const bookId = GRPT.extractBookId(bookLink?.href);
     if (!bookId || !isVisible(image) || !isLikelyBookCover(image)) return;
     activeCoverImages.add(image);
+    const languageCode = selectedLanguage.code;
+    const knownWorkId = findWorkIdNearImage(image);
+    let preflight = coverPreflights.get(image);
+    if (preflight?.bookId !== String(bookId) || preflight.languageCode !== languageCode
+      || preflight.knownWorkId !== knownWorkId) {
+      preflight = {
+        bookId: String(bookId),
+        languageCode,
+        knownWorkId,
+        promise: GRPT.Cache.resolveBook(bookId, languageCode, knownWorkId)
+      };
+      coverPreflights.set(image, preflight);
+    }
     clearTimeout(coverTimers.get(image));
     coverTimers.set(image, setTimeout(() => {
       coverTimers.delete(image);
       if (!activeCoverImages.has(image) || !image.isConnected) return;
+      if (preflight.languageCode !== selectedLanguage.code) {
+        preflight = {
+          bookId: String(bookId),
+          languageCode: selectedLanguage.code,
+          knownWorkId,
+          promise: GRPT.Cache.resolveBook(bookId, selectedLanguage.code, knownWorkId)
+        };
+        coverPreflights.set(image, preflight);
+      }
       let record = coverRecords.get(image);
       if (record && (!record.host.isConnected || !record.mount.contains(image))) {
         removeCoverRecord(record);
@@ -415,7 +479,7 @@
       }
       positionCoverRecord(record);
       renderCoverRecord(record);
-      lookupBook(bookId);
+      lookupBook(bookId, preflight.knownWorkId, preflight.promise);
     }, COVER_HOVER_DELAY_MS));
   }
 

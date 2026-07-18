@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [4.3.0] - 2026-07-17
+
+### Added
+
+- In-memory cache hydration for near-instant repeated checks.
+- Cache preflight during the 700 ms hover window without network activity.
+- Local `work_id` discovery from nearby Goodreads card metadata and links.
+- Shared work mappings for different editions of the same Goodreads work.
+- Regression coverage for storage reads, consolidated writes, local work lookup,
+  and network-free cached cover indicators.
+
+### Changed
+
+- Only actual Goodreads network lookups enter the rate-limited request queue.
+- Book-to-work mappings and edition results are now persisted in one operation.
+- Cache reads are consolidated and synchronized across extension contexts.
+
 ## [4.2.0] - 2026-07-17
 
 ### Added

@@ -28,6 +28,8 @@ currently exposed by the Goodreads editions filter.
   requests, a 30-second timeout, and first-page-only edition checks.
 - **Language-aware cache:** positive, negative, and partial results are cached
   separately for each selected language.
+- **Instant cache path:** local cache checks run during the hover delay, and
+  cache hits bypass the network queue entirely.
 - **Isolated UI:** Shadow DOM prevents extension styles from leaking into
   Goodreads and keeps Goodreads styles out of extension components.
 - **No analytics, ads, tracking, affiliate links, or developer-operated server.**
@@ -73,6 +75,8 @@ The extension is deliberately conservative:
 - Each request times out after 30 seconds.
 - Only the first filtered editions page is checked.
 - Multiple covers for the same book share in-memory state.
+- Different editions mapped to the same Goodreads work share cached results.
+- Only actual network misses enter the rate-limited request queue.
 - Found results are cached for 30 days.
 - Negative and partial results are cached for 7 days.
 - Cache storage is capped and automatically pruned.
