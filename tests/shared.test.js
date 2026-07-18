@@ -130,6 +130,31 @@ test('estimates a conservative minimum from visible pagination without extra req
   assert.equal(result.totalPages, 5);
   assert.equal(result.minimumEditionCount, 40);
   assert.equal(result.partial, true);
+  assert.equal(result.editionCountIsExact, false);
+});
+
+test('uses the exact Goodreads edition total when the results summary provides it', async () => {
+  const rows = Array.from({ length: 10 }, (_, index) => `
+    <div class="elementList"><div class="editionData">
+      <a class="bookTitle" href="/book/show/${900 + index}">Edition ${index + 1}</a>
+      <div>Edition language: Portuguese</div>
+    </div></div>`).join('');
+  const html = `<select name="filter_by_language"><option value="por">Portuguese</option></select>
+    <div class="showingPages"><span>Showing 1-10 of 209</span></div>
+    ${rows}
+    <a href="/work/editions/2207778?page=21" rel="next">next »</a>`;
+  let calls = 0;
+  const result = await GRPT.fetchAllEditions('2207778', {
+    fetcher: async () => {
+      calls += 1;
+      return { ok: true, status: 200, text: async () => html };
+    }
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.totalPages, 21);
+  assert.equal(result.minimumEditionCount, 209);
+  assert.equal(result.editionCountIsExact, true);
 });
 
 test('marks results as partial when a later page fails', async () => {

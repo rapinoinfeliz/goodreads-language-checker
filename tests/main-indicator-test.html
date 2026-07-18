@@ -20,7 +20,9 @@
     (async () => {
       history.replaceState({}, '', '/book/show/123');
       const originalFetch = window.fetch.bind(window);
-      const editionHtml = await originalFetch('/tests/fixtures/portuguese-page-1.html').then((response) => response.text());
+      const editionFixture = await originalFetch('/tests/fixtures/portuguese-page-1.html').then((response) => response.text());
+      const editionHtml = editionFixture.replace('<body>',
+        '<body><div class="showingPages">Showing 1-10 of 209</div>');
       const spanishHtml = await originalFetch('/tests/fixtures/spanish-page.html').then((response) => response.text());
       const storage = {};
       window.chrome = {
@@ -57,15 +59,19 @@
       badge?.click();
       await new Promise((resolve) => setTimeout(resolve, 250));
       const panel = globalShadow?.querySelector('.panel');
+      const initialBackdrop = panel?.parentElement;
       const panelRect = panel?.getBoundingClientRect();
       const initialFocusIsPanel = globalShadow?.activeElement === panel;
       const initialEditionCount = globalShadow?.querySelectorAll('.edition').length;
       const initialBadgeIsPortuguese = badge?.textContent.includes('Portuguese editions') === true;
       const initialControlHasFlagAndCount = Boolean(badge?.querySelector('.brazil-flag'))
-        && badge?.querySelector('.grpt-count')?.textContent === '1';
+        && badge?.querySelector('.grpt-count')?.textContent === '209';
       const initialRequestCount = requestedUrls.length;
       const panelResize = getComputedStyle(panel).resize;
       const panelTitleWhiteSpace = getComputedStyle(panel?.querySelector('.edition-title')).whiteSpace;
+      const initialElegantPanelHeader = Boolean(panel?.querySelector('.panel-header-icon .brazil-flag'))
+        && panel?.querySelector('.panel-title')?.textContent === 'Portuguese editions'
+        && panel?.querySelector('.panel-summary')?.textContent === '209 editions found';
       const languageButton = panel?.querySelector('.panel-language-button');
       languageButton?.click();
       const languagePickerOpened = panel?.querySelector('.panel-language-picker')?.hidden === false;
@@ -77,6 +83,7 @@
       }
       await new Promise((resolve) => setTimeout(resolve, 500));
       const updatedPanel = globalShadow?.querySelector('.panel');
+      const languageUpdatedInsideSamePopup = updatedPanel?.parentElement === initialBackdrop;
       const languageChangedFromFlag = requestedUrls.some((url) => url.includes('filter_by_language=spa'))
         && updatedPanel?.querySelector('.panel-title')?.textContent === 'Spanish editions'
         && updatedPanel?.querySelector('.panel-header-icon .language-flag')?.textContent === '🇪🇸';
@@ -111,11 +118,9 @@
           && !panel?.textContent.includes('first Goodreads results page')
           && !panel?.textContent.includes('For safety'),
         panelReceivesInitialFocus: initialFocusIsPanel,
-        elegantPanelHeader: Boolean(panel?.querySelector('.panel-header-icon .brazil-flag'))
-          && panel?.querySelector('.panel-title')?.textContent === 'Portuguese editions'
-          && panel?.querySelector('.panel-summary')?.textContent === '1 edition found',
+        elegantPanelHeader: initialElegantPanelHeader,
         languagePickerOpensFromFlag: languagePickerOpened && allPanelLanguagesAvailable,
-        languageChangesFromFlag: languageChangedFromFlag,
+        languageChangesFromFlag: languageChangedFromFlag && languageUpdatedInsideSamePopup,
         goodreadsDomUntouched: !document.querySelector('.grpt-badge, .panel')
       };
       const passed = Object.values(checks).every(Boolean);

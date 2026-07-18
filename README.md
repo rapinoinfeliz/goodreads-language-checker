@@ -26,10 +26,10 @@ currently exposed by the Goodreads editions filter.
   that sizes itself to its contents and viewport, with covers, metadata,
   ISBN-13 values, and Goodreads links.
 - **In-panel language switcher:** click the header flag to check the same work
-  in any supported language.
-- **Conservative edition totals:** when Goodreads exposes multiple result pages,
-  the panel estimates a minimum count from visible pagination without fetching
-  those pages.
+  in any supported language while the current popup remains open.
+- **Accurate edition totals:** the panel uses Goodreads' exact filtered total
+  when available, otherwise it estimates a conservative minimum from visible
+  pagination, without fetching additional pages.
 - **Defensive request behavior:** one request at a time, a minimum delay between
   requests, a 30-second timeout, and first-page-only edition checks.
 - **Language-aware cache:** positive, negative, and partial results are cached

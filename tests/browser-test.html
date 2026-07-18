@@ -30,6 +30,13 @@
           return { ok: true, status: 200, text: async () => paginationHtml };
         }
       });
+      const exactTotalHtml = paginationHtml.replace(
+        '<select name="filter_by_language">',
+        '<div class="showingPages">Showing 1-10 of 209</div><select name="filter_by_language">'
+      );
+      const exactTotal = await GRPT.fetchAllEditions('2207778', {
+        fetcher: async () => ({ ok: true, status: 200, text: async () => exactTotalHtml })
+      });
       const checks = {
         firstEdition: first.editions.length === 1 && first.editions[0].bookId === '101',
         nextPage: first.nextPageUrl?.includes('page=2') === true,
@@ -39,7 +46,10 @@
         selectedLanguageUrl: GRPT.buildEditionsUrl('999', 'spa').includes('filter_by_language=spa'),
         conservativePaginationEstimate: paginationCalls === 1
           && paginationEstimate.totalPages === 5
-          && paginationEstimate.minimumEditionCount === 40,
+          && paginationEstimate.minimumEditionCount === 40
+          && paginationEstimate.editionCountIsExact === false,
+        exactReportedEditionCount: exactTotal.minimumEditionCount === 209
+          && exactTotal.editionCountIsExact === true,
         safeUrl: GRPT.sanitizeEdition({ title: 'X', url: 'javascript:alert(1)' }).url === null
       };
       const passed = Object.values(checks).every(Boolean);

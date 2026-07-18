@@ -8,7 +8,7 @@ let getCalls = 0;
 let setCalls = 0;
 const stored = {
   [cacheKey]: {
-    version: 4,
+    version: 5,
     entries: {
       'por:999': {
         status: 'found',

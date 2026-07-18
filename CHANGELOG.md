@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## [4.5.1] - 2026-07-17
+
+### Fixed
+
+- Exact filtered-edition totals are now read from Goodreads' results summary,
+  such as `Showing 1-10 of 209`, without requesting additional pages.
+- The cache schema was advanced so partial counts saved before version 4.5.0
+  cannot mask the improved totals after upgrading.
+- Changing language now refreshes the contents inside the existing editions
+  popup instead of closing and reopening its overlay.
+
 ## [4.5.0] - 2026-07-17
 
 ### Added

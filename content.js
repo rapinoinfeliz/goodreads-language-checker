@@ -258,6 +258,7 @@
     state.totalPages = Math.max(1, Number(cached.totalPages) || 1);
     state.minimumEditionCount = Math.max(state.editions.length,
       Number(cached.minimumEditionCount) || state.editions.length);
+    state.editionCountIsExact = Boolean(cached.editionCountIsExact);
     setBookState(bookId, state);
     return state;
   }
@@ -306,7 +307,8 @@
             editions: result.editions,
             partial: result.partial,
             totalPages: result.totalPages,
-            minimumEditionCount: result.minimumEditionCount
+            minimumEditionCount: result.minimumEditionCount,
+            editionCountIsExact: result.editionCountIsExact
           });
         } catch (error) {
           console.error('[Goodreads Edition Checker] Failed to check book:', bookId, error);
@@ -336,6 +338,7 @@
       partial: false,
       totalPages: 1,
       minimumEditionCount: 0,
+      editionCountIsExact: false,
       promise: null,
       language
     };
@@ -747,7 +750,8 @@
       button.classList.add('grpt-found');
       const displayedCount = Math.max(state.editions.length,
         Number(state.minimumEditionCount) || state.editions.length);
-      const estimatedCount = state.partial && displayedCount > state.editions.length;
+      const estimatedCount = !state.editionCountIsExact
+        && state.partial && displayedCount > state.editions.length;
       const icon = appendTextElement(button, 'grpt-icon', '');
       icon.append(createLanguageIcon(language));
       appendTextElement(button, 'grpt-text', `${language.label} editions`);
@@ -779,11 +783,18 @@
     applyMainPillLayout(buyControl);
   }
 
-  function openEditionsPanel(state, opener = null) {
-    closeEditionsPanel();
+  function openEditionsPanel(state, opener = null, options = {}) {
+    const reusableBackdrop = options.backdrop?.isConnected ? options.backdrop : null;
+    if (reusableBackdrop && panelContext?.backdrop === reusableBackdrop) {
+      document.removeEventListener('keydown', panelContext.keyHandler);
+      reusableBackdrop.replaceChildren();
+      panelContext = null;
+    } else {
+      closeEditionsPanel();
+    }
     const language = state.language || selectedLanguage;
-    const backdrop = document.createElement('div');
-    backdrop.className = 'modal-backdrop';
+    const backdrop = reusableBackdrop || document.createElement('div');
+    if (!reusableBackdrop) backdrop.className = 'modal-backdrop';
     const panel = document.createElement('section');
     panel.className = 'panel';
     panel.setAttribute('role', 'dialog');
@@ -794,7 +805,8 @@
     const editionCount = state.editions.length;
     const displayedEditionCount = Math.max(editionCount,
       Number(state.minimumEditionCount) || editionCount);
-    const estimatedEditionCount = state.partial && displayedEditionCount > editionCount;
+    const estimatedEditionCount = !state.editionCountIsExact
+      && state.partial && displayedEditionCount > editionCount;
     const longestLine = Math.max(
       `${language.label} editions`.length,
       ...state.editions.flatMap((edition) => [edition.title, edition.meta, edition.isbn13]
@@ -869,7 +881,7 @@
     footer.appendChild(link);
     panel.appendChild(footer);
     backdrop.appendChild(panel);
-    ui.modalLayer.appendChild(backdrop);
+    if (!reusableBackdrop) ui.modalLayer.appendChild(backdrop);
 
     headerIcon.addEventListener('click', () => {
       languagePicker.hidden = !languagePicker.hidden;
@@ -894,11 +906,21 @@
       const sourceWorkId = state.workId;
       try {
         await GRPT.Settings.setLanguage(nextLanguage.code);
-        applyLanguage(nextLanguage);
+        applyLanguage(nextLanguage, { keepPanel: true });
+        languagePicker.hidden = true;
+        headerIcon.setAttribute('aria-expanded', 'false');
+        headerIcon.replaceChildren(createLanguageIcon(nextLanguage));
+        appendTextElement(headerIcon, 'panel-language-chevron', '▾').setAttribute('aria-hidden', 'true');
+        headerIcon.setAttribute('aria-label', `Change edition language; current language is ${nextLanguage.label}`);
+        title.textContent = `${nextLanguage.label} editions`;
+        summary.textContent = `Checking ${nextLanguage.label} editions…`;
         if (sourceBookId && sourceWorkId) {
           const nextState = await lookupBook(sourceBookId, sourceWorkId);
-          if (['found', 'not-found'].includes(nextState.status)) {
-            openEditionsPanel(nextState, opener);
+          if (backdrop.isConnected && ['found', 'not-found'].includes(nextState.status)) {
+            openEditionsPanel(nextState, opener, { backdrop });
+          } else if (backdrop.isConnected) {
+            summary.textContent = `Could not check ${nextLanguage.label} editions right now`;
+            languageSelect.disabled = false;
           }
         }
       } catch (error) {
@@ -938,9 +960,11 @@
       }
     };
     close.addEventListener('click', closeEditionsPanel);
-    backdrop.addEventListener('click', (event) => {
-      if (event.target === backdrop) closeEditionsPanel();
-    });
+    if (!reusableBackdrop) {
+      backdrop.addEventListener('click', (event) => {
+        if (event.target === backdrop) closeEditionsPanel();
+      });
+    }
     document.addEventListener('keydown', keyHandler);
     panelContext = { backdrop, keyHandler, opener: opener || mainContext?.button };
     panel.focus();
@@ -1007,11 +1031,11 @@
     }, delayMs);
   }
 
-  function applyLanguage(language) {
+  function applyLanguage(language, options = {}) {
     const nextLanguage = GRPT.Settings.normalizeLanguage(language);
     if (nextLanguage.code === selectedLanguage.code) return;
     selectedLanguage = nextLanguage;
-    closeEditionsPanel();
+    if (!options.keepPanel) closeEditionsPanel();
     for (const record of coverRecords.values()) removeCoverRecord(record);
     coverRecords.clear();
     if (mainContext) {
