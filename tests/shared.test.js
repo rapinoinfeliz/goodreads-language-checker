@@ -104,6 +104,34 @@ test('the default limit checks only the first page', async () => {
   assert.equal(result.partial, true);
 });
 
+test('estimates a conservative minimum from visible pagination without extra requests', async () => {
+  const rows = Array.from({ length: 10 }, (_, index) => `
+    <div class="elementList"><div class="editionData">
+      <a class="bookTitle" href="/book/show/${700 + index}">Edition ${index + 1}</a>
+      <div>Edition language: Portuguese</div>
+    </div></div>`).join('');
+  const html = `<select name="filter_by_language"><option value="por">Portuguese</option></select>
+    ${rows}
+    <a href="/reviews?page=999">Unrelated pagination</a>
+    <a href="/work/editions/999?page=2">2</a>
+    <a href="/work/editions/999?page=3">3</a>
+    <a href="/work/editions/999?page=4">4</a>
+    <a href="/work/editions/999?page=5" rel="next">next »</a>`;
+  let calls = 0;
+  const result = await GRPT.fetchAllEditions('999', {
+    fetcher: async () => {
+      calls += 1;
+      return { ok: true, status: 200, text: async () => html };
+    }
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.editions.length, 10);
+  assert.equal(result.totalPages, 5);
+  assert.equal(result.minimumEditionCount, 40);
+  assert.equal(result.partial, true);
+});
+
 test('marks results as partial when a later page fails', async () => {
   const first = fixture('portuguese-page-1.html');
   let calls = 0;

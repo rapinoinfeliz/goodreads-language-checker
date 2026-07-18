@@ -15,6 +15,21 @@
       const mixed = GRPT.parseEditionsPage(html['mixed-languages.html']);
       const absent = GRPT.parseEditionsPage(html['no-portuguese.html']);
       const spanish = GRPT.parseEditionsPage(html['spanish-page.html'], { languageCode: 'spa' });
+      const paginationRows = Array.from({ length: 10 }, (_, index) => `
+        <div class="elementList"><div class="editionData">
+          <a class="bookTitle" href="/book/show/${800 + index}">Edition ${index + 1}</a>
+          <div>Edition language: Portuguese</div>
+        </div></div>`).join('');
+      const paginationHtml = `<select name="filter_by_language"><option value="por">Portuguese</option></select>
+        ${paginationRows}<a href="/reviews?page=999">Unrelated pagination</a>
+        <a rel="next" href="/work/editions/999?page=5">next »</a>`;
+      let paginationCalls = 0;
+      const paginationEstimate = await GRPT.fetchAllEditions('999', {
+        fetcher: async () => {
+          paginationCalls += 1;
+          return { ok: true, status: 200, text: async () => paginationHtml };
+        }
+      });
       const checks = {
         firstEdition: first.editions.length === 1 && first.editions[0].bookId === '101',
         nextPage: first.nextPageUrl?.includes('page=2') === true,
@@ -22,6 +37,9 @@
         absentLanguage: absent.hasLanguage === false && absent.editions.length === 0,
         selectedLanguage: spanish.hasLanguage === true && spanish.editions[0]?.bookId === '303',
         selectedLanguageUrl: GRPT.buildEditionsUrl('999', 'spa').includes('filter_by_language=spa'),
+        conservativePaginationEstimate: paginationCalls === 1
+          && paginationEstimate.totalPages === 5
+          && paginationEstimate.minimumEditionCount === 40,
         safeUrl: GRPT.sanitizeEdition({ title: 'X', url: 'javascript:alert(1)' }).url === null
       };
       const passed = Object.values(checks).every(Boolean);

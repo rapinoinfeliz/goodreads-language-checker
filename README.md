@@ -22,9 +22,14 @@ currently exposed by the Goodreads editions filter.
 - **Book-page integration:** a dedicated pill appears below the purchase controls.
 - **At-a-glance cover status:** flag for a match, `×` for no match, and a small
   spinner while checking.
-- **Edition details:** click a positive marker or pill to open a polished,
-  responsive, desktop-resizable panel with covers, metadata, ISBN-13 values,
-  and Goodreads links.
+- **Edition details:** click a positive marker or pill to open a polished panel
+  that sizes itself to its contents and viewport, with covers, metadata,
+  ISBN-13 values, and Goodreads links.
+- **In-panel language switcher:** click the header flag to check the same work
+  in any supported language.
+- **Conservative edition totals:** when Goodreads exposes multiple result pages,
+  the panel estimates a minimum count from visible pagination without fetching
+  those pages.
 - **Defensive request behavior:** one request at a time, a minimum delay between
   requests, a 30-second timeout, and first-page-only edition checks.
 - **Language-aware cache:** positive, negative, and partial results are cached

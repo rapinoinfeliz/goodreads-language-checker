@@ -8,6 +8,10 @@
     #cached-cover-image,
     #negative-cover-image { display: block; width: 80px; height: 120px; }
     #avatar-image { display: block; width: 48px; height: 48px; }
+    #blog-book { position: relative; width: 156px; height: 226px; text-align: center; }
+    #blog-center { display: block; width: 156px; height: 226px; }
+    #blog-link { display: inline; }
+    #blog-cover-image { display: inline-block; width: 145px; height: 215px; margin: 5px 0; }
   </style>
 </head>
 <body>
@@ -28,6 +32,11 @@
   </div>
   <div id="cached-cover-card">
     <a href="https://www.goodreads.com/book/show/124-outro"><img id="cached-cover-image" alt="Cached cover" width="80" height="120"></a>
+  </div>
+  <div id="blog-book">
+    <div id="blog-center">
+      <a id="blog-link" href="https://www.goodreads.com/book/show/124-outro"><img id="blog-cover-image" alt="Blog cover"></a>
+    </div>
   </div>
   <div id="avatar-card">
     <img id="avatar-image" alt="Author avatar" width="48" height="48">
@@ -114,6 +123,19 @@
         ?.shadowRoot?.querySelector('.cover-marker.found');
       const requestsAfterCachedCover = requests;
 
+      const blogCover = document.getElementById('blog-cover-image');
+      blogCover.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 780));
+      const blogCoverHost = [...document.querySelectorAll('[data-grpt-cover-host]')]
+        .find((host) => host.parentElement?.contains(blogCover));
+      const blogHostRect = blogCoverHost?.getBoundingClientRect();
+      const blogImageRect = blogCover.getBoundingClientRect();
+      const blogMarkerAligned = blogCoverHost?.parentElement === document.getElementById('blog-center')
+        && Math.abs(blogHostRect.left - blogImageRect.left) < 1
+        && Math.abs(blogHostRect.top - blogImageRect.top) < 1
+        && Math.abs(blogHostRect.width - blogImageRect.width) < 1
+        && Math.abs(blogHostRect.height - blogImageRect.height) < 1;
+
       const negativeCover = document.getElementById('negative-cover-image');
       negativeCover.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 2200));
@@ -146,6 +168,7 @@
         discreetLoaderShownWhileSearching: loadingMarkerSeen,
         cachedCoverIsImmediate: Boolean(cachedCoverMarker),
         cachedCoverSkipsNetworkQueue: requestsAfterCachedCover === requestsBeforeCachedCover,
+        blogInlineCoverIsAligned: blogMarkerAligned,
         onlyRequiredCoverRequests: requests === 3,
         coverFlagAdded: coverMarkers.some((marker) => marker?.classList.contains('found')
           && marker.textContent.trim() === '' && marker.querySelector('.brazil-flag')),

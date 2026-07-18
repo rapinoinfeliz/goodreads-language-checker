@@ -388,6 +388,30 @@
     return null;
   }
 
+  function getTotalPageCount(doc, html) {
+    let totalPages = 1;
+    if (doc?.querySelectorAll) {
+      for (const link of doc.querySelectorAll('a[href*="/work/editions/"][href*="page="]')) {
+        try {
+          const page = Number(new URL(link.getAttribute('href'), GOODREADS_ORIGIN).searchParams.get('page'));
+          if (Number.isInteger(page) && page > totalPages) totalPages = page;
+        } catch {}
+      }
+      for (const current of doc.querySelectorAll('.pagination .current')) {
+        const page = Number(current.textContent.trim());
+        if (Number.isInteger(page) && page > totalPages) totalPages = page;
+      }
+      return totalPages;
+    }
+    for (const match of String(html || '').matchAll(/<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>/gi)) {
+      const absolute = validateEditionsPageUrl(match[1].replace(/&amp;/gi, '&'));
+      if (!absolute) continue;
+      const page = Number(new URL(absolute).searchParams.get('page'));
+      if (Number.isInteger(page) && page > totalPages) totalPages = page;
+    }
+    return totalPages;
+  }
+
   function parseEditionsPage(html, options = {}) {
     const language = normalizeLanguage(options.languageCode || options.language);
     if (typeof DOMParser === 'undefined') {
@@ -398,7 +422,8 @@
       return {
         editions: hasLanguage ? parseEditionsWithRegex(html, { language }) : [],
         hasLanguage,
-        nextPageUrl: hasLanguage ? getNextPageUrlWithRegex(html) : null
+        nextPageUrl: hasLanguage ? getNextPageUrlWithRegex(html) : null,
+        totalPages: hasLanguage ? getTotalPageCount(null, html) : 1
       };
     }
 
@@ -407,7 +432,7 @@
       throw new Error('Goodreads returned an editions page in an unexpected format.');
     }
     const hasLanguage = hasTargetLanguage(doc, html, language);
-    if (!hasLanguage) return { editions: [], hasLanguage: false, nextPageUrl: null };
+    if (!hasLanguage) return { editions: [], hasLanguage: false, nextPageUrl: null, totalPages: 1 };
 
     const editions = [];
     for (const elementList of doc.querySelectorAll('.elementList')) {
@@ -420,7 +445,8 @@
     return {
       editions: deduplicateEditions(editions.length ? editions : parseEditionsWithRegex(html, { language })),
       hasLanguage: true,
-      nextPageUrl: getNextPageUrl(doc)
+      nextPageUrl: getNextPageUrl(doc),
+      totalPages: getTotalPageCount(doc, html)
     };
   }
 
@@ -446,6 +472,8 @@
     let nextUrl = firstUrl;
     let pagesFetched = 0;
     let partial = false;
+    let totalPages = 1;
+    let firstPageEditionCount = 0;
 
     while (nextUrl && pagesFetched < maxPages && !visited.has(nextUrl)) {
       visited.add(nextUrl);
@@ -484,16 +512,26 @@
       }
       pagesFetched += 1;
       if (pagesFetched === 1 && !parsed.hasLanguage) break;
+      if (pagesFetched === 1) {
+        totalPages = Math.max(1, Number(parsed.totalPages) || 1);
+        firstPageEditionCount = parsed.editions.length;
+      }
       editions.push(...parsed.editions);
       nextUrl = parsed.nextPageUrl;
     }
 
     if (nextUrl && pagesFetched >= maxPages) partial = true;
+    const deduplicated = deduplicateEditions(editions);
+    const minimumEditionCount = partial && totalPages > pagesFetched
+      ? Math.max(deduplicated.length, firstPageEditionCount * Math.max(1, totalPages - 1))
+      : deduplicated.length;
     return {
-      editions: deduplicateEditions(editions),
+      editions: deduplicated,
       editionsPageUrl: firstUrl,
       pagesFetched,
-      partial
+      partial,
+      totalPages,
+      minimumEditionCount
     };
   }
 
@@ -563,6 +601,8 @@
       status: entry.status,
       editions,
       partial: Boolean(entry.partial),
+      totalPages: Math.max(1, Number(entry.totalPages) || 1),
+      minimumEditionCount: Math.max(editions.length, Number(entry.minimumEditionCount) || editions.length),
       updatedAt: Number(entry.updatedAt)
     };
   }
@@ -605,6 +645,8 @@
       status,
       editions: status === 'found' ? deduplicateEditions(data.editions) : [],
       partial: Boolean(data?.partial),
+      totalPages: Math.max(1, Number(data?.totalPages) || 1),
+      minimumEditionCount: Math.max(data?.editions?.length || 0, Number(data?.minimumEditionCount) || 0),
       updatedAt: Date.now()
     };
 
@@ -660,6 +702,8 @@
       status,
       editions: status === 'found' ? editions : [],
       partial: Boolean(data?.partial),
+      totalPages: Math.max(1, Number(data?.totalPages) || 1),
+      minimumEditionCount: Math.max(editions.length, Number(data?.minimumEditionCount) || editions.length),
       updatedAt: now
     };
     cache.entries = pruneCacheEntries(cache.entries);

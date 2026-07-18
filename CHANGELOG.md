@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here.
 
+## [4.5.0] - 2026-07-17
+
+### Added
+
+- The editions-panel flag now opens the complete language selector.
+- Changing language from the panel immediately checks and reopens the same work
+  in the selected language.
+- Conservative minimum edition counts derived from visible Goodreads pagination
+  without requesting additional pages.
+- Regression coverage for Goodreads blog cards with inline cover links.
+
+### Changed
+
+- Panel width is estimated from its longest visible content and capped by the
+  viewport; height now follows the rendered rows automatically.
+- Long edition titles and metadata stay on one line with accessible ellipsis.
+- Cover-marker mounting skips inline containers to remain aligned on Goodreads
+  blog and editorial layouts.
+
+### Removed
+
+- First-page request notices from the editions panel.
+- Manual panel resizing and its corner resize handle.
+
 ## [4.4.0] - 2026-07-17
 
 ### Changed
