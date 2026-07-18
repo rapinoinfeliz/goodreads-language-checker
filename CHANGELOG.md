@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [4.5.2] - 2026-07-18
+
+### Fixed
+
+- In-panel language changes now update extension state before saving settings,
+  preventing Chrome's storage-change event from closing the editions popup.
+- Refreshed panel contents no longer replay the popup entrance animation.
+- Browser regression coverage now reproduces synchronous storage-change events.
+
 ## [4.5.1] - 2026-07-17
 
 ### Fixed

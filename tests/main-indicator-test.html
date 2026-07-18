@@ -25,14 +25,23 @@
         '<body><div class="showingPages">Showing 1-10 of 209</div>');
       const spanishHtml = await originalFetch('/tests/fixtures/spanish-page.html').then((response) => response.text());
       const storage = {};
+      const storageChangeListeners = [];
       window.chrome = {
         runtime: { onMessage: { addListener() {} } },
         storage: {
           local: {
             async get(key) { return { [key]: storage[key] }; },
-            async set(value) { Object.assign(storage, value); },
+            async set(value) {
+              const changes = {};
+              for (const [key, newValue] of Object.entries(value)) {
+                changes[key] = { oldValue: storage[key], newValue };
+              }
+              Object.assign(storage, value);
+              for (const listener of storageChangeListeners) listener(changes, 'local');
+            },
             async remove(key) { delete storage[key]; }
-          }
+          },
+          onChanged: { addListener(listener) { storageChangeListeners.push(listener); } }
         }
       };
       const requestedUrls = [];
@@ -84,6 +93,8 @@
       await new Promise((resolve) => setTimeout(resolve, 500));
       const updatedPanel = globalShadow?.querySelector('.panel');
       const languageUpdatedInsideSamePopup = updatedPanel?.parentElement === initialBackdrop;
+      const languageRefreshDoesNotReplayAnimation = updatedPanel?.classList.contains('panel-refresh')
+        && getComputedStyle(updatedPanel).animationName === 'none';
       const languageChangedFromFlag = requestedUrls.some((url) => url.includes('filter_by_language=spa'))
         && updatedPanel?.querySelector('.panel-title')?.textContent === 'Spanish editions'
         && updatedPanel?.querySelector('.panel-header-icon .language-flag')?.textContent === '🇪🇸';
@@ -120,7 +131,9 @@
         panelReceivesInitialFocus: initialFocusIsPanel,
         elegantPanelHeader: initialElegantPanelHeader,
         languagePickerOpensFromFlag: languagePickerOpened && allPanelLanguagesAvailable,
-        languageChangesFromFlag: languageChangedFromFlag && languageUpdatedInsideSamePopup,
+        languageChangesFromFlag: languageChangedFromFlag
+          && languageUpdatedInsideSamePopup
+          && languageRefreshDoesNotReplayAnimation,
         goodreadsDomUntouched: !document.querySelector('.grpt-badge, .panel')
       };
       const passed = Object.values(checks).every(Boolean);

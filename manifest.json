@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Goodreads Edition Language Checker",
-  "version": "4.5.1",
+  "version": "4.5.2",
   "description": "Checks on demand for editions in a selected language and discreetly marks book covers on Goodreads.",
   "homepage_url": "https://github.com/rapinoinfeliz/goodreads-language-checker",
 

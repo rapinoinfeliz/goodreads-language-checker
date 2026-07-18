@@ -84,6 +84,7 @@
         animation: grpt-panel-in .18s cubic-bezier(.2,.8,.2,1);
       }
       .panel:focus { outline: none; }
+      .panel.panel-refresh { animation: none; }
       .panel-header {
         flex: 0 0 auto; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center;
         gap: 12px; padding: 15px 16px 15px 18px; color: #fff;
@@ -797,6 +798,7 @@
     if (!reusableBackdrop) backdrop.className = 'modal-backdrop';
     const panel = document.createElement('section');
     panel.className = 'panel';
+    if (reusableBackdrop) panel.classList.add('panel-refresh');
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');
     panel.setAttribute('aria-labelledby', 'grpt-panel-title');
@@ -904,16 +906,16 @@
       languageSelect.disabled = true;
       const sourceBookId = state.bookId || mainContext?.bookId;
       const sourceWorkId = state.workId;
+      applyLanguage(nextLanguage, { keepPanel: true });
+      languagePicker.hidden = true;
+      headerIcon.setAttribute('aria-expanded', 'false');
+      headerIcon.replaceChildren(createLanguageIcon(nextLanguage));
+      appendTextElement(headerIcon, 'panel-language-chevron', '▾').setAttribute('aria-hidden', 'true');
+      headerIcon.setAttribute('aria-label', `Change edition language; current language is ${nextLanguage.label}`);
+      title.textContent = `${nextLanguage.label} editions`;
+      summary.textContent = `Checking ${nextLanguage.label} editions…`;
       try {
         await GRPT.Settings.setLanguage(nextLanguage.code);
-        applyLanguage(nextLanguage, { keepPanel: true });
-        languagePicker.hidden = true;
-        headerIcon.setAttribute('aria-expanded', 'false');
-        headerIcon.replaceChildren(createLanguageIcon(nextLanguage));
-        appendTextElement(headerIcon, 'panel-language-chevron', '▾').setAttribute('aria-hidden', 'true');
-        headerIcon.setAttribute('aria-label', `Change edition language; current language is ${nextLanguage.label}`);
-        title.textContent = `${nextLanguage.label} editions`;
-        summary.textContent = `Checking ${nextLanguage.label} editions…`;
         if (sourceBookId && sourceWorkId) {
           const nextState = await lookupBook(sourceBookId, sourceWorkId);
           if (backdrop.isConnected && ['found', 'not-found'].includes(nextState.status)) {
@@ -925,8 +927,14 @@
         }
       } catch (error) {
         console.error('[Goodreads Edition Checker] Failed to change panel language:', error);
+        applyLanguage(language, { keepPanel: true });
         languageSelect.value = language.code;
         languageSelect.disabled = false;
+        headerIcon.replaceChildren(createLanguageIcon(language));
+        appendTextElement(headerIcon, 'panel-language-chevron', '▾').setAttribute('aria-hidden', 'true');
+        headerIcon.setAttribute('aria-label', `Change edition language; current language is ${language.label}`);
+        title.textContent = `${language.label} editions`;
+        summary.textContent = 'Could not save the language change';
       }
     });
 
